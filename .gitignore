@@ -1,0 +1,46 @@
+# Go binaries
+# Ignore any executable files (common naming patterns)
+bin/
+
+# Test coverage files
+*.out
+*.coverprofile
+
+# Go modules
+# Only ignore vendor/ if you are not vendoring your dependencies
+# vendor/
+
+# IDE files
+# JetBrains/GoLand
+.idea/
+*.iws
+*.iml
+*.ipr
+cmake-build-*/
+out/
+
+# VS Code
+.vscode/
+
+# Environment and Secret files
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+cert-cache/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Dependency directories (if applicable)
+# node_modules/
+
+# Logs
+*.log
