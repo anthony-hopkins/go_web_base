@@ -1,4 +1,4 @@
-module rest_api
+module github.com/anthony-hopkins/rest_api_template
 
 go 1.26
 

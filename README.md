@@ -2,86 +2,95 @@
 
 A robust, production-ready Go REST API template featuring modern Go 1.26 idioms, automated HTTPS, rate limiting, and observability.
 
-## Features
+## Project Overview
 
-- **Automated HTTPS**: Integrated with Let's Encrypt (ACME) via `autocert` for automatic certificate management.
+This project provides a solid foundation for building secure web services in Go. It handles the "boring but critical" parts of a production service: TLS management, security headers, rate limiting, structured logging, and monitoring.
+
+### Key Features
+
+- **Automated HTTPS**: Integrated with Let's Encrypt (ACME) via `autocert` for zero-touch certificate management.
 - **Modern Security**: 
-    - Enforced TLS 1.3.
-    - Automatic security headers (HSTS, CSP, X-Frame-Options, etc.).
-    - Request body size limiting to prevent memory exhaustion.
-    - Panic recovery middleware to ensure server stability.
+    - Enforced **TLS 1.3** and secure cipher suites.
+    - Comprehensive security headers (HSTS, CSP, X-Frame-Options, etc.).
+    - Request body size limiting to prevent Denial of Service (DoS).
+    - Panic recovery middleware for high availability.
 - **Observability**:
-    - Structured logging using `log/slog` with JSON output.
-    - Prometheus metrics endpoint (`/metrics`) for real-time monitoring of request counts, duration, rate limit hits, and panics.
+    - Structured JSON logging using `log/slog`.
+    - Native Prometheus metrics endpoint (`/metrics`) tracking request volume, latency, errors, and rate limit hits.
 - **Traffic Management**:
-    - Per-IP rate limiting with configurable burst capacity and automatic cleanup of stale limiters.
-    - Support for trusted proxies (e.g., Load Balancers) via `X-Forwarded-For`.
-- **Modern Go Idioms**: Uses Go 1.26 features like `cmp.Or` for defaults, `slog` for logging, and `http.NewServeMux` with method-based routing.
+    - Smart per-IP rate limiting with configurable burst capacity.
+    - Automatic memory management: stale rate limiters are cleared in the background.
+    - Support for `X-Forwarded-For` when running behind load balancers.
+- **Modern Go Idioms**: Uses Go 1.26 features like `cmp.Or` for configuration defaults, `slog` for logging, and the enhanced `http.ServeMux` for clean, method-based routing.
 
-## Prerequisites
+## Project Structure
 
-- Go 1.26 or later.
-- A valid domain name (if using ACME/Let's Encrypt).
-- Ports 80 and 443 open for ACME challenges and HTTPS traffic.
+The project is organized into a clean, modular structure:
 
-## Configuration
+```text
+rest_api/
+├── main.go              # Application entry point; wires up the server and routes.
+├── pkg/
+│   └── server/          # Core server logic and middleware.
+│       ├── config.go    # Environment-based configuration loading and validation.
+│       ├── metrics.go   # Prometheus metrics definitions.
+│       ├── middleware.go# HTTP middleware chain (logging, security, auth, etc.).
+│       └── server.go    # Server lifecycle management (Start, TLS, Shutdown).
+├── go.mod               # Go module definition.
+├── go.sum               # Dependency checksums.
+└── README.md            # You are here.
+```
 
-Configuration is managed via environment variables. You can also use a `.env` file in the project root.
+## Detailed Component Breakdown
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `API_KEY` | **Required**. API key for the application. | - |
-| `DOMAIN` | **Required**. Domain name for Let's Encrypt. | - |
-| `HTTPS_PORT` | Port for HTTPS traffic. | `:443` |
-| `HTTP_PORT` | Port for HTTP traffic (ACME challenges). | `:80` |
-| `ACME_ENABLED` | Enable Let's Encrypt. | `true` |
-| `TRUST_PROXY` | Trust `X-Forwarded-For` headers. | `false` |
-| `RATE_LIMIT` | Requests per second per IP. | `10` |
-| `RATE_BURST` | Burst capacity per IP. | `20` |
-| `MAX_BODY_BYTES` | Max request body size. | `10MB` |
+### 1. Server Lifecycle (`pkg/server/server.go`)
+Manages the HTTP and HTTPS servers. It handles the ACME challenge responder for Let's Encrypt and ensures the primary server shuts down gracefully when an OS signal (SIGINT/SIGTERM) is received.
+
+### 2. Configuration (`pkg/server/config.go`)
+Loads settings from the environment or a `.env` file. It validates mandatory fields like `API_KEY` and `DOMAIN` and provides sensible defaults for optional settings using `cmp.Or`.
+
+### 3. Middlewares (`pkg/server/middleware.go`)
+A layered chain of handlers:
+- **Recovery**: Catch panics and return 500s.
+- **Request ID**: Assigns a GUID to every request for end-to-end tracing.
+- **Security Headers**: Sets modern browser security policies.
+- **Rate Limit**: Throttles clients based on IP to prevent abuse.
+- **Logging**: Records request details and updates Prometheus metrics.
+
+### 4. Metrics (`pkg/server/metrics.go`)
+Defines the `http_requests_total`, `http_request_duration_seconds`, `rate_limit_hits_total`, and `panics_total` metrics.
 
 ## Getting Started
+
+### Prerequisites
+- Go 1.26 or later.
+- A valid domain name (for ACME/Let's Encrypt).
+- Ports 80 and 443 open in your firewall.
+
+### Installation & Run
 
 1. **Clone the repository**:
    ```bash
    git clone <repository-url>
-   cd rest_api
+   cd https://github.com/anthony-hopkins/rest_api_template
    ```
 
-2. **Set up environment variables**:
-   Create a `.env` file:
+2. **Configure Environment**:
+   Create a `.env` file in the root:
    ```env
    API_KEY=your-secret-key
-   DOMAIN=example.com
+   DOMAIN=yourdomain.com
+   ACME_ENABLED=true
    ```
 
-3. **Run the application**:
+3. **Run**:
    ```bash
    go run main.go
    ```
 
-4. **Access the API**:
-   - Application: `https://example.com/`
-   - Health Check: `https://example.com/health`
-   - Metrics: `https://example.com/metrics`
-
-## Code Structure
-
-The project is contained within `main.go` for simplicity, following a clean, middleware-driven architecture:
-
-- `Config`: Handles environment-based configuration.
-- `main()`: Entry point; initializes the router, middlewares, and servers (HTTP/HTTPS).
-- **Middlewares**:
-    - `loggingMiddleware`: Logs requests and updates Prometheus metrics.
-    - `rateLimitMiddleware`: Manages per-IP traffic limits.
-    - `securityHeadersMiddleware`: Injects security-best-practice headers.
-    - `requestIDMiddleware`: Assigns a unique ID to every request for tracing.
-    - `recoveryMiddleware`: Safely handles application panics.
-
 ## Local Development (No ACME)
 
-If you are developing locally and don't have a domain or want to use ACME:
-
+To run locally without a domain or Let's Encrypt:
 1. Set `ACME_ENABLED=false` in your `.env`.
-2. (Optional) Provide `TLS_CERT_FILE` and `TLS_KEY_FILE` to use your own certificates.
-3. If no certificates are provided, the server will log a warning and run over HTTP if reached.
+2. Optionally set `HTTPS_PORT=:8443` or similar.
+3. If no certificates are provided, the server will log a warning and run over HTTP (useful for local testing behind a local proxy).
