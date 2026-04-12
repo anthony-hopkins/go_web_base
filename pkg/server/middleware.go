@@ -26,31 +26,32 @@ type loggerKey struct{}
 
 // requestIDMiddleware generates a globally unique identifier (GUID) for every incoming request.
 // This ID is injected into the response headers (X-Request-ID) and the request context.
-// It also attaches a pre-configured logger to the context that automatically includes
-// the request ID in all log messages.
+// It also attaches a contextual logger that automatically includes the request ID in all log messages,
+// enabling easy request tracing across multiple handlers and background tasks.
 func requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Generate 8 bytes of random data for the request ID.
+		// We use crypto/rand for high-quality entropy to minimize collisions.
 		b := make([]byte, 8)
 		if _, err := rand.Read(b); err != nil {
-			// Fallback: If the cryptographic RNG fails, use nanosecond timestamp as entropy.
+			// Fallback: If the cryptographic RNG fails (rare), use nanosecond timestamp as entropy.
 			slog.Error("Failed to generate cryptographic request ID, using timestamp fallback", "error", err)
 			b = []byte(fmt.Sprintf("%08x", time.Now().UnixNano()))[:8]
 		}
 		requestID := hex.EncodeToString(b)
 
-		// Set the X-Request-ID header so the client can reference this ID in bug reports or support tickets.
+		// Set the X-Request-ID header so the client can reference this ID for debugging.
 		w.Header().Set("X-Request-ID", requestID)
 
-		// Create a logger instance that is 'baked' with the current request ID.
+		// Create a logger instance that is 'pre-populated' with the current request ID.
 		// All subsequent log calls using this logger will have this ID attached as metadata.
 		logger := slog.Default().With("request_id", requestID)
 
-		// Store both the raw ID and the logger in the request context for downstream use.
+		// Store both the raw ID and the logger in the request context for downstream handlers.
 		ctx := context.WithValue(r.Context(), requestIDKey{}, requestID)
 		ctx = context.WithValue(ctx, loggerKey{}, logger)
 
-		// Continue the middleware chain with the updated context.
+		// Continue the middleware chain with the newly enriched context.
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -198,32 +199,41 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// loggingMiddleware provides high-level observability for every request. It records
-// the execution time, HTTP method, path, remote address, and response status code.
-// It also updates Prometheus metrics for total requests and request durations.
+// loggingMiddleware provides high-level observability for every request.
+// It records:
+// 1. Request execution time (latency).
+// 2. HTTP method, path, and remote address.
+// 3. Response status code.
+// It also updates Prometheus metrics (http_requests_total and http_request_duration_seconds).
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		// Wrap the response writer to capture the resulting status code.
+		// Wrap the standard ResponseWriter with our custom responseWriter to capture the status code.
+		// Default to 200 OK if WriteHeader is never called.
 		rw := &responseWriter{w, http.StatusOK}
 
-		// Execute the next handler in the chain.
+		// Execute the next handler in the middleware chain.
 		next.ServeHTTP(rw, r)
 
+		// Calculate the total duration of the request.
 		duration := time.Since(start)
 
-		// Log the request completion details using the contextual logger.
-		getLogger(r).Info("Request processed",
+		// Extract the contextual logger that includes the unique request ID.
+		logger := getLogger(r)
+
+		// Log the structured request data.
+		logger.Info("Request handled",
 			"method", r.Method,
 			"path", r.URL.Path,
-			"remote_addr", r.RemoteAddr,
 			"status", rw.statusCode,
 			"duration", duration,
+			"ip", r.RemoteAddr,
 		)
 
-		// Record metrics for Prometheus.
-		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, strconv.Itoa(rw.statusCode)).Inc()
+		// Update Prometheus metrics for observability.
+		statusStr := strconv.Itoa(rw.statusCode)
+		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusStr).Inc()
 		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration.Seconds())
 	})
 }

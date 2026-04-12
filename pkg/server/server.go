@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/crypto/acme/autocert"
 )
 
 // Server represents the core HTTP/HTTPS server component.
@@ -44,98 +43,79 @@ func (s *Server) HandleFunc(pattern string, handler func(http.ResponseWriter, *h
 	s.mux.HandleFunc(pattern, handler)
 }
 
-// Start orchestrates the complete server lifecycle. It performs the following:
-// 1. Configures the /metrics endpoint for Prometheus.
-// 2. Builds the middleware chain (Recovery, Request ID, Security Headers, Rate Limiting, Logging).
-// 3. Configures TLS (either via Let's Encrypt/ACME or manual certificates).
-// 4. Starts a background cleaner for the rate limiters.
-// 5. Listens for OS interrupt signals to perform a graceful shutdown.
+// Start orchestrates the complete server lifecycle. It performs the following steps:
+// 1. Registers the /metrics endpoint for Prometheus scraping.
+// 2. Initializes the middleware stack (Recovery, Request ID, Security, Rate Limiting, Logging).
+// 3. Configures TLS settings, loading manual certificates if provided.
+// 4. Launches a background routine to clean up stale rate limiters.
+// 5. Starts the main HTTP(S) listener in a goroutine.
+// 6. Blocks until an OS termination signal is received, then initiates a graceful shutdown.
 func (s *Server) Start() error {
 	// Register the Prometheus metrics endpoint.
-	// This is where monitoring tools like Prometheus or Grafana scrape data.
+	// This allows monitoring tools to scrape data about server performance and health.
 	s.mux.Handle("GET /metrics", promhttp.Handler())
 
-	// Initialize the Middleware Chain in reverse order of execution.
-	// Logging is the outermost layer, followed by rate limiting, security headers, etc.
+	// Build the Middleware Chain.
+	// The order of execution is from the bottom of this list to the top (outermost to innermost).
+	// 1. recoveryMiddleware: Catches and logs panics.
+	// 2. requestIDMiddleware: Assigns a unique ID to each request.
+	// 3. securityHeadersMiddleware: Adds security-related HTTP headers.
+	// 4. rateLimitMiddleware: Throttles requests based on client IP.
+	// 5. loggingMiddleware: Records request details and metrics.
 	handler := recoveryMiddleware(s.mux)
 	handler = requestIDMiddleware(handler)
 	handler = securityHeadersMiddleware(handler)
 	handler = rateLimitMiddleware(handler, s.cfg)
 	handler = loggingMiddleware(handler)
 
-	// Wrap the final handler with MaxBytesHandler to prevent large payload attacks
-	// that could lead to memory exhaustion.
+	// Wrap the final handler with MaxBytesHandler.
+	// This provides a hard limit on the request body size at the network level,
+	// protecting against memory exhaustion attacks.
 	handler = http.MaxBytesHandler(handler, s.cfg.MaxBodyBytes)
 
-	// Define secure TLS defaults (TLS 1.3 only, HTTP/2 and HTTP/1.1 support).
+	// Configure secure TLS defaults.
+	// We enforce TLS 1.3 as the minimum version for better security and performance.
+	// NextProtos enables HTTP/2 support via ALPN.
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		NextProtos: []string{"h2", "http/1.1"},
 	}
 
+	// errChan allows goroutines to report fatal startup errors back to the main thread.
 	errChan := make(chan error, 1)
 
-	// --- TLS Configuration Logic ---
-	if s.cfg.ACMEEnabled {
-		// Set up Let's Encrypt (ACME) automated certificate management.
-		m := &autocert.Manager{
-			Cache:      autocert.DirCache(s.cfg.CertCacheDir), // Persist certificates on disk.
-			Prompt:     autocert.AcceptTOS,                    // Automatically accept Let's Encrypt TOS.
-			HostPolicy: autocert.HostWhitelist(s.cfg.Domain),  // Only issue certs for our configured domain.
-		}
-		tlsConfig.GetCertificate = m.GetCertificate
-
-		// Start a secondary HTTP server to handle ACME HTTP-01 challenges and
-		// potentially redirect HTTP to HTTPS.
-		httpSrv := &http.Server{
-			Addr:           s.cfg.HTTPPort,
-			Handler:        m.HTTPHandler(nil),
-			MaxHeaderBytes: s.cfg.MaxHeaderBytes,
-			ReadTimeout:    5 * time.Second,
-		}
-		go func() {
-			slog.Info("Starting ACME challenge responder", "addr", s.cfg.HTTPPort)
-			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errChan <- fmt.Errorf("HTTP-01 challenge server failed: %w", err)
-			}
-		}()
-		// Ensure the challenge server is shut down when Start() returns.
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-				slog.Error("ACME challenge server shutdown failed", "error", err)
-			}
-		}()
-	} else if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
-		// Load certificates manually if ACME is disabled but paths are provided.
+	// --- TLS Configuration ---
+	if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
+		// Attempt to load the X.509 certificate and private key from the specified files.
 		cert, err := tls.LoadX509KeyPair(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
 		if err != nil {
 			return fmt.Errorf("failed to load custom TLS certificates: %w", err)
 		}
 		tlsConfig.Certificates = []tls.Certificate{cert}
 	} else {
-		slog.Warn("ACME disabled and no custom certificates provided; running in insecure/hybrid mode")
+		// If no certificates are provided, the server will fall back to insecure HTTP.
+		slog.Warn("No custom certificates provided; running in insecure mode (HTTP)")
 	}
 
-	// Initialize the primary HTTPS server.
+	// Initialize the underlying http.Server with production-ready timeouts.
 	s.server = &http.Server{
 		Addr:           s.cfg.HTTPSPort,
 		Handler:        handler,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		IdleTimeout:    120 * time.Second,
+		ReadTimeout:    10 * time.Second,  // Max duration for reading the entire request.
+		WriteTimeout:   10 * time.Second,  // Max duration before timing out writes of the response.
+		IdleTimeout:    120 * time.Second, // Max time to wait for the next request when keep-alive is enabled.
 		MaxHeaderBytes: s.cfg.MaxHeaderBytes,
 		TLSConfig:      tlsConfig,
 	}
 
-	// --- Background Maintenance Tasks ---
-	// Start a goroutine to periodically clean up expired rate limiters from memory.
+	// --- Background Maintenance ---
+	// Start a dedicated goroutine for periodic memory cleanup.
 	go func() {
 		ticker := time.NewTicker(s.cfg.RateCleanupInterval)
 		defer ticker.Stop()
 		for range ticker.C {
 			mu.Lock()
+			// Iterate through the limiters map and remove entries that haven't been seen recently.
 			for ip, limiter := range limiters {
 				if time.Since(limiter.lastSeen) > s.cfg.RateExpiration {
 					delete(limiters, ip)
@@ -146,25 +126,32 @@ func (s *Server) Start() error {
 	}()
 
 	// --- Graceful Shutdown Setup ---
-	// Create a channel to catch OS signals for graceful termination.
+	// Notify the 'quit' channel on OS interrupt or termination signals.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
-	// Launch the primary server in its own goroutine so we can block on the quit channel.
+	// Start the server in a non-blocking goroutine.
 	go func() {
-		slog.Info("Starting primary server", "addr", s.cfg.HTTPSPort, "tls", (s.cfg.ACMEEnabled || s.cfg.TLSCertFile != ""))
+		isTLS := s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != ""
+		slog.Info("Starting primary server", "addr", s.cfg.HTTPSPort, "tls", isTLS)
+
 		var err error
-		if s.cfg.ACMEEnabled || (s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "") {
+		if isTLS {
+			// ListenAndServeTLS starts the server with HTTPS.
+			// Cert/Key files are empty here because they were already loaded into tlsConfig.
 			err = s.server.ListenAndServeTLS("", "")
 		} else {
+			// ListenAndServe starts the server with plain HTTP.
 			err = s.server.ListenAndServe()
 		}
+
+		// http.ErrServerClosed is returned when Shutdown() is called, so it's not a fatal error.
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errChan <- fmt.Errorf("Primary server failed: %w", err)
 		}
 	}()
 
-	// Block until we receive a termination signal or a fatal error occurs.
+	// Wait for a shutdown signal or a fatal error from the server goroutine.
 	select {
 	case sig := <-quit:
 		slog.Info("Termination signal received, initiating graceful shutdown", "signal", sig.String())
@@ -172,11 +159,12 @@ func (s *Server) Start() error {
 		return err
 	}
 
-	// Create a context with a timeout for the shutdown process.
+	// Create a context for the shutdown process with a configured timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
 	defer cancel()
 
-	// Shut down the server, giving active connections time to finish.
+	// Shutdown() gracefully stops the server by closing all listeners and
+	// then waiting for active connections to become idle or for the context to timeout.
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("server forced to shutdown: %w", err)
 	}
