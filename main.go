@@ -47,7 +47,7 @@ func main() {
 	// Define the root endpoint (/).
 	// We use the enhanced http.ServeMux (introduced in Go 1.22) which
 	// allows specifying the HTTP method directly in the pattern string.
-	srv.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	srv.HandleProtectedFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		_, err := w.Write([]byte("Hello over HTTPS"))
 		if err != nil {
 			slog.Error("Failed to write response", "error", err)

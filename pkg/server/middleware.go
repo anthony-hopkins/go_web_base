@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -180,5 +181,18 @@ func loggingMiddleware(next http.Handler, trustProxy bool) http.Handler {
 		statusStr := strconv.Itoa(rw.statusCode)
 		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusStr).Inc()
 		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration.Seconds())
+	})
+}
+
+// apiKeyAuthMiddleware enforces endpoint-level authentication using a shared API key.
+// The key must be supplied in the X-API-Key header.
+func apiKeyAuthMiddleware(expectedKey string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providedKey := r.Header.Get("X-API-Key")
+		if len(providedKey) == 0 || subtle.ConstantTimeCompare([]byte(providedKey), []byte(expectedKey)) != 1 {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }

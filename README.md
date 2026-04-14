@@ -26,6 +26,31 @@ This project provides a solid foundation for building secure web services in Go.
 
 Configure request limits (e.g. `limit_req`, connection limits, or WAF rules) in **Nginx** (or your edge) rather than in this binary. The app does not emit `429` from an internal limiter.
 
+### Example: Nginx `limit_req`
+
+Below is a minimal example showing per-client request throttling at the edge. Adjust rates/bursts for your traffic profile.
+
+```nginx
+# http {}
+limit_req_zone $binary_remote_addr zone=api_ratelimit:10m rate=10r/s;
+
+server {
+    # ... TLS / upstream config ...
+
+    location / {
+        # Allow short bursts while still enforcing a sustained rate.
+        limit_req zone=api_ratelimit burst=20 nodelay;
+
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+        proxy_pass http://127.0.0.1:8080;
+    }
+}
+```
+
+If a client exceeds the policy, **Nginx will return `429`** (and the Go service will never see the request).
+
 ## Project Structure
 
 The project follows a clean, modular structure:

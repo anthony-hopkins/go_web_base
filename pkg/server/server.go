@@ -43,6 +43,16 @@ func (s *Server) HandleFunc(pattern string, handler func(http.ResponseWriter, *h
 	s.mux.HandleFunc(pattern, handler)
 }
 
+// HandleProtected registers a handler that requires a valid X-API-Key header.
+func (s *Server) HandleProtected(pattern string, handler http.Handler) {
+	s.mux.Handle(pattern, apiKeyAuthMiddleware(s.cfg.APIKey, handler))
+}
+
+// HandleProtectedFunc registers a function handler that requires a valid X-API-Key header.
+func (s *Server) HandleProtectedFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	s.mux.Handle(pattern, apiKeyAuthMiddleware(s.cfg.APIKey, http.HandlerFunc(handler)))
+}
+
 // Start orchestrates the complete server lifecycle. It performs the following steps:
 // 1. Registers the /metrics endpoint for Prometheus scraping.
 // 2. Initializes the middleware stack (Recovery, Request ID, Security, Logging).
