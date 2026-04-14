@@ -448,3 +448,207 @@ If the final `rg` command does not match, coverage is below target and the comma
 - Keep CORS origin lists narrow and explicit.
 - Keep `TRUST_PROXY=false` unless requests always pass through trusted proxy hops.
 - Move in-memory SPA state to a persistent store when data durability is required.
+
+## Customizing the UI for your own app
+
+This template keeps all user-visible HTML in `web/templates/*.gohtml` and all routing/rendering logic in `pkg/ui`. The browser loads the **shell** once; each **panel** is a named `html/template` definition that is either embedded in the shell (full page) or returned alone (HTMX fragment). Matching the existing patterns means your changes stay small and predictable.
+
+### Mental model (keep these invariants)
+
+1. **Template file names do not matter; `define` names do.** `loadTemplates` parses every `*.gohtml` file into one `template.Template`. The string you pass to `renderShell`, `renderPanel`, and `renderPanelTemplate` must match a `{{ define "name" }}` block somewhere in those files.
+2. **One shell, many panels.** `shell` is the full document; everything else (for example `dashboard`, `tasks`) is inner HTML injected into `shellViewModel.Content` or returned as a fragment.
+3. **HTMX chooses full page vs fragment.** Handlers call `isHTMXFragment(r)` (checks `HX-Request: true`). If true, respond with `renderPanel` only; otherwise call `renderShell` so direct visits and refreshes get CSS and navigation.
+4. **Routes live in one place.** `App.RegisterRoutes` in `pkg/ui/app.go` is the complete list of UI paths. `main.go` only calls `spaApp.RegisterRoutes(srv)` after building the app; you normally do not add UI routes in `main.go`.
+5. **Readiness checks know about templates.** `pkg/ui/health.go` uses `templates.Lookup("...")` for each panel you rely on. When you add or rename panels, update those lookups or `/health` and `/readyz` will report `degraded`.
+
+---
+
+### 1. Rename the product and the default home panel
+
+The home page `GET /` is implemented by `handleShell`, which always embeds one panel inside the shell. Today that default is `"dashboard"`.
+
+In `pkg/ui/app.go`, change the visible title:
+
+```go
+const appTitle = "My Application"
+```
+
+In `pkg/ui/routes.go`, point `handleShell` at whichever panel should appear on `/` (the string is the template `define` name):
+
+```go
+func (a *App) handleShell(w http.ResponseWriter, r *http.Request) {
+	if err := a.renderShell(w, "dashboard", a.state.snapshot()); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+		slog.Error("Failed to render shell", "panel", "dashboard", "error", err)
+	}
+}
+```
+
+If you rename the default panel to `home`, pass `"home"` in both `renderShell` and the `slog.Error` `"panel"` argument for consistent logs.
+
+---
+
+### 2. Remove a panel and its route (example: drop Settings)
+
+Work through these in order so you do not leave dead routes or failing health checks.
+
+1. **Delete the template**  
+   Remove `web/templates/settings.gohtml` (or the file that defines the panel you are removing).
+
+2. **Remove the handler**  
+   In `pkg/ui/routes.go`, delete `handleSettings` entirely.
+
+3. **Unregister the path**  
+   In `pkg/ui/app.go`, remove the corresponding line from `RegisterRoutes`:
+
+   ```go
+   srv.HandleFunc("GET /ui/settings", a.handleSettings)
+   ```
+
+4. **Remove navigation**  
+   In `web/templates/shell.gohtml`, delete the `<button>` (or link) that calls `hx-get="/ui/settings"`.
+
+5. **Update readiness**  
+   In `pkg/ui/health.go`, remove the `a.templates.Lookup("settings")` check from the condition that sets `templates_loaded` to `failed`.
+
+6. **Run tests**  
+   After removals, run `go test ./...` and fix any assertions that referenced the old path or template name.
+
+---
+
+### 3. Add a new read-only panel and route
+
+Suppose you add a **Reports** panel at `GET /ui/reports`, following the same pattern as `handleDashboard`.
+
+**Step A — Template**  
+Create `web/templates/reports.gohtml`:
+
+```html
+{{ define "reports" }}
+<section>
+  <h2>Reports</h2>
+  <p class="muted">Rendered at {{ .Now }}</p>
+</section>
+{{ end }}
+```
+
+The fields available inside the panel come from `panelViewModel` in `pkg/ui/state.go`. Add fields there if you need more data, extend `snapshot()` to populate them, and use `{{ .YourField }}` in the template.
+
+**Step B — Handler**  
+In `pkg/ui/routes.go`, add a method on `*App` (same structure as the existing dashboard handler):
+
+```go
+func (a *App) handleReports(w http.ResponseWriter, r *http.Request) {
+	model := a.state.snapshot()
+	if isHTMXFragment(r) {
+		a.renderPanel(w, "reports", model)
+		return
+	}
+	if err := a.renderShell(w, "reports", model); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+		slog.Error("Failed to render shell", "panel", "reports", "error", err)
+	}
+}
+```
+
+**Step C — Register the route**  
+In `pkg/ui/app.go`, inside `RegisterRoutes`:
+
+```go
+srv.HandleFunc("GET /ui/reports", a.handleReports)
+```
+
+**Step D — Navigation**  
+In `web/templates/shell.gohtml`, add a nav control that targets `#spa-content` like the existing buttons:
+
+```html
+<button class="nav-btn" hx-get="/ui/reports" hx-target="#spa-content" hx-swap="innerHTML" hx-push-url="true">Reports</button>
+```
+
+**Step E — Health checks**  
+In `pkg/ui/health.go`, include `reports` in the template lookup condition:
+
+```go
+if a.templates.Lookup("shell") == nil ||
+	a.templates.Lookup("dashboard") == nil ||
+	a.templates.Lookup("tasks") == nil ||
+	a.templates.Lookup("settings") == nil ||
+	a.templates.Lookup("reports") == nil {
+	checks["templates_loaded"] = "failed"
+}
+```
+
+(When you delete demo panels, simplify this condition to only the `define` names you still ship.)
+
+---
+
+### 4. Add a form that mutates state (POST + HTMX)
+
+The tasks flow shows the full pattern: **POST** handler, `ParseForm`, state mutation, then re-render the **same** panel for both HTMX and full-page clients.
+
+Handler shape (from `handleCreateTask` in `pkg/ui/routes.go`):
+
+```go
+func (a *App) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form payload", http.StatusBadRequest)
+		return
+	}
+	task := strings.TrimSpace(r.FormValue("task"))
+	if task != "" {
+		a.state.addTask(task)
+	}
+	model := a.state.snapshot()
+	if isHTMXFragment(r) {
+		a.renderPanel(w, "tasks", model)
+		return
+	}
+	if err := a.renderShell(w, "tasks", model); err != nil {
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+		slog.Error("Failed to render shell", "panel", "tasks", "error", err)
+	}
+}
+```
+
+Template side: the form must use the same path and target as in `web/templates/tasks.gohtml` — `hx-post` to your route, `hx-target="#spa-content"`, and inputs use `name="..."` matching `FormValue` in Go.
+
+Register the POST in `RegisterRoutes`:
+
+```go
+srv.HandleFunc("POST /ui/tasks", a.handleCreateTask)
+```
+
+For a new POST endpoint (for example `POST /ui/reports/ack`), add a handler, register it, and point a form’s `hx-post` at that path; re-render whichever panel should reflect the new state.
+
+---
+
+### 5. Replace or slim down in-memory state
+
+Demo data lives in `pkg/ui/state.go` (`state`, `panelViewModel`, `snapshot`, `addTask`) and default seed values in `ui.New` in `pkg/ui/app.go`.
+
+- **Rename or remove fields:** Edit `state` and `panelViewModel` together, update `snapshot()`, and adjust templates that reference `.Tasks`, `.ServiceState`, etc.
+- **Remove tasks entirely:** Delete `tasks.gohtml`, task routes and handlers, task-related state and methods, nav and health references; set `handleShell` to your new default panel.
+- **Add persistence later:** Keep handler shapes the same; swap `state` for a store interface implemented with your database — the HTMX and template layers stay unchanged as long as you still produce a `panelViewModel` (or a new type you thread through templates — if you rename the type, update `renderShell`/`renderPanel` signatures in `pkg/ui/templates.go` and `pkg/ui/routes.go` consistently).
+
+---
+
+### 6. Static assets and CSP
+
+CSS and other files live under `web/static/` and are served from `GET /assets/` via `RegisterRoutes`. New files (for example `reports.css`) are available at `/assets/reports.css` with no extra Go code. If you load scripts or styles from new origins, update the `Content-Security-Policy` in `pkg/server/middleware.go` so the browser is allowed to load them.
+
+---
+
+### 7. Customization checklist
+
+| Change | Where to edit |
+|--------|----------------|
+| App title in header and `<title>` | `appTitle` in `pkg/ui/app.go` |
+| Default panel on `GET /` | `handleShell` in `pkg/ui/routes.go` |
+| New URL path | `RegisterRoutes` in `pkg/ui/app.go` + new handler in `pkg/ui/routes.go` |
+| New panel HTML | New or edited `web/templates/*.gohtml` with `{{ define "name" }}` |
+| Nav / HTMX | `web/templates/shell.gohtml` (`hx-get`, `hx-target="#spa-content"`) |
+| Data shown in panels | `panelViewModel` / `state` in `pkg/ui/state.go`, `ui.New` defaults in `pkg/ui/app.go` |
+| Readiness template list | `Health()` in `pkg/ui/health.go` |
+| Tests | `pkg/ui/ui_test.go`, `main_test.go` — update paths and body assertions |
+
+After substantive UI changes, run `go test ./...` and manually verify `GET /`, an HTMX-driven nav click (fragment swap), and a direct browser load of a deep link such as `GET /ui/your-panel` (full shell).
