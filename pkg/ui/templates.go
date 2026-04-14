@@ -2,9 +2,9 @@ package ui
 
 import (
 	"html/template"
+	"io/fs"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"strings"
 )
 
@@ -26,9 +26,8 @@ func (a *App) renderPanelTemplate(panel string, model panelViewModel) (string, e
 	return b.String(), err
 }
 
-// loadTemplates parses all files matching web/templates/*.gohtml at process startup.
+// loadTemplates parses all *.gohtml files at the root of templateFS (e.g. embedded web/templates).
 // Misconfigured templates therefore fail fast during ui.New rather than at first request.
-func loadTemplates() (*template.Template, error) {
-	pattern := filepath.Join("web", "templates", "*.gohtml")
-	return template.ParseGlob(pattern)
+func loadTemplates(templateFS fs.FS) (*template.Template, error) {
+	return template.ParseFS(templateFS, "*.gohtml")
 }

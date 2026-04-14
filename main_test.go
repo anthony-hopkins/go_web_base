@@ -1,13 +1,15 @@
 // Tests for main package bootstrap: dependency injection of config/server/UI factories,
-// health handler wiring, degraded paths when the working directory lacks templates, and
-// process exit codes. fakeServer records registered routes; failingWriter forces write
-// errors for handler error branches.
+// health handler wiring, degraded readiness when static fs has no app.css, and process
+// exit codes. fakeServer records registered routes; failingWriter forces write errors
+// for handler error branches.
 package main
 
 import (
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -55,8 +57,8 @@ func (w *failingWriter) Header() http.Header {
 func (w *failingWriter) Write([]byte) (int, error)  { return 0, errors.New("write failed") }
 func (w *failingWriter) WriteHeader(statusCode int) {}
 
-// TestRunSuccess asserts run() registers health/livez/readyz, exercises their handlers
-// including json encode failure paths, and observes 503 when the UI is unhealthy (wrong cwd).
+// TestRunSuccess asserts run() registers health/livez/readyz and exercises their handlers
+// including json encode failure paths.
 func TestRunSuccess(t *testing.T) {
 	t.Chdir(projectRootMain(t))
 
@@ -65,7 +67,7 @@ func TestRunSuccess(t *testing.T) {
 		loadConfigFunc, newServerFunc, newUIFunc = oldLoad, oldServer, oldUI
 	})
 
-	fs := &fakeServer{}
+	mockSrv := &fakeServer{}
 	loadConfigFunc = func() (server.Config, error) {
 		return server.Config{
 			APIKey:          "k",
@@ -76,44 +78,80 @@ func TestRunSuccess(t *testing.T) {
 			ShutdownTimeout: 1,
 		}, nil
 	}
-	newServerFunc = func(cfg server.Config) appServer { return fs }
-	newUIFunc = ui.New
+	newServerFunc = func(cfg server.Config) appServer { return mockSrv }
+	newUIFunc = func(templateFS, staticFS fs.FS) (*ui.App, error) { return ui.New(templateFS, staticFS) }
 
 	if err := run(); err != nil {
 		t.Fatalf("run returned error: %v", err)
 	}
-	if fs.funcs["GET /health"] == nil || fs.funcs["GET /livez"] == nil || fs.funcs["GET /readyz"] == nil {
+	if mockSrv.funcs["GET /health"] == nil || mockSrv.funcs["GET /livez"] == nil || mockSrv.funcs["GET /readyz"] == nil {
 		t.Fatalf("expected health handlers to be registered")
 	}
 
 	// Cover handler internals registered in run().
 	rec := httptest.NewRecorder()
-	fs.funcs["GET /livez"](rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
+	mockSrv.funcs["GET /livez"](rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected livez 200, got %d", rec.Code)
 	}
-	fs.funcs["GET /livez"](&failingWriter{}, httptest.NewRequest(http.MethodGet, "/livez", nil))
+	mockSrv.funcs["GET /livez"](&failingWriter{}, httptest.NewRequest(http.MethodGet, "/livez", nil))
 
 	rec = httptest.NewRecorder()
-	fs.funcs["GET /health"](rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	mockSrv.funcs["GET /health"](rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected health 200, got %d", rec.Code)
 	}
-	fs.funcs["GET /health"](&failingWriter{}, httptest.NewRequest(http.MethodGet, "/health", nil))
+	mockSrv.funcs["GET /health"](&failingWriter{}, httptest.NewRequest(http.MethodGet, "/health", nil))
 
-	t.Chdir(t.TempDir())
 	rec = httptest.NewRecorder()
-	fs.funcs["GET /health"](rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	mockSrv.funcs["GET /readyz"](rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected readyz 200, got %d", rec.Code)
+	}
+	mockSrv.funcs["GET /readyz"](&failingWriter{}, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+}
+
+// TestRunHealthDegradedWhenStaticMissing asserts /health and /readyz return 503 when the UI
+// is wired with an empty static tree (no app.css), while templates come from embed.
+func TestRunHealthDegradedWhenStaticMissing(t *testing.T) {
+	t.Chdir(projectRootMain(t))
+
+	oldLoad, oldServer, oldUI := loadConfigFunc, newServerFunc, newUIFunc
+	t.Cleanup(func() {
+		loadConfigFunc, newServerFunc, newUIFunc = oldLoad, oldServer, oldUI
+	})
+
+	mockSrv := &fakeServer{}
+	loadConfigFunc = func() (server.Config, error) {
+		return server.Config{
+			APIKey:          "k",
+			Domain:          "example.com",
+			HTTPSPort:       ":0",
+			MaxHeaderBytes:  1024,
+			MaxBodyBytes:    1024,
+			ShutdownTimeout: 1,
+		}, nil
+	}
+	newServerFunc = func(cfg server.Config) appServer { return mockSrv }
+	newUIFunc = func(tpl fs.FS, _ fs.FS) (*ui.App, error) {
+		return ui.New(tpl, os.DirFS(t.TempDir()))
+	}
+
+	if err := run(); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	mockSrv.funcs["GET /health"](rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected degraded health 503, got %d", rec.Code)
 	}
 
 	rec = httptest.NewRecorder()
-	fs.funcs["GET /readyz"](rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	mockSrv.funcs["GET /readyz"](rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected degraded readyz 503, got %d", rec.Code)
 	}
-	fs.funcs["GET /readyz"](&failingWriter{}, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 }
 
 // TestRunConfigError ensures configuration failures surface from run() without starting the server.
@@ -133,7 +171,7 @@ func TestRunUIInitError(t *testing.T) {
 	loadConfigFunc = func() (server.Config, error) {
 		return server.Config{APIKey: "k", Domain: "d"}, nil
 	}
-	newUIFunc = func() (*ui.App, error) { return nil, errors.New("ui failed") }
+	newUIFunc = func(_, _ fs.FS) (*ui.App, error) { return nil, errors.New("ui failed") }
 	if err := run(); err == nil {
 		t.Fatal("expected run to fail on ui error")
 	}
@@ -148,7 +186,7 @@ func TestRunServerStartError(t *testing.T) {
 		return server.Config{APIKey: "k", Domain: "d"}, nil
 	}
 	newServerFunc = func(cfg server.Config) appServer { return &fakeServer{startErr: errors.New("boom")} }
-	newUIFunc = func() (*ui.App, error) { return &ui.App{}, nil }
+	newUIFunc = func(_, _ fs.FS) (*ui.App, error) { return &ui.App{}, nil }
 
 	if err := run(); err == nil {
 		t.Fatal("expected run to fail on server start")
@@ -163,7 +201,7 @@ func TestMainSuccess(t *testing.T) {
 
 	loadConfigFunc = func() (server.Config, error) { return server.Config{APIKey: "k", Domain: "d"}, nil }
 	newServerFunc = func(cfg server.Config) appServer { return &fakeServer{} }
-	newUIFunc = ui.New
+	newUIFunc = func(templateFS, staticFS fs.FS) (*ui.App, error) { return ui.New(templateFS, staticFS) }
 	main()
 }
 

@@ -1,25 +1,27 @@
 // Tests for template loading, health aggregation, HTMX vs full-page routing, state
-// mutation, and error branches in shell rendering. Many tests chdir to the module root
-// so web/templates and web/static resolve as in production.
+// mutation, and error branches in shell rendering. Template and static trees are supplied
+// as fs.FS (see testTemplateFS / testStaticFS) so tests do not depend on process cwd.
 package ui
 
 import (
 	"encoding/json"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
-// TestNewAndHealth ensures New succeeds from the repo root and Health reports ok.
+// TestNewAndHealth ensures New succeeds and Health reports ok.
 func TestNewAndHealth(t *testing.T) {
-	t.Chdir(projectRoot(t))
-	app, err := New()
+	app, err := New(testTemplateFS(t), testStaticFS(t))
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -38,6 +40,7 @@ func TestHealthDegradedWhenCSSMissing(t *testing.T) {
 	t.Chdir(t.TempDir())
 	app := &App{
 		templates: templateMust(t),
+		staticFS:  os.DirFS(t.TempDir()),
 		state: &state{
 			tasks:        []string{"a"},
 			lastUpdated:  time.Now().UTC(),
@@ -58,6 +61,7 @@ func TestHealthDegradedForMissingTemplateAndState(t *testing.T) {
 	template.Must(tmpl.New("shell").Parse("{{define \"shell\"}}ok{{end}}"))
 	app := &App{
 		templates: tmpl,
+		staticFS:  testStaticFS(t),
 		state:     &state{},
 		startedAt: time.Now().UTC(),
 	}
@@ -69,8 +73,7 @@ func TestHealthDegradedForMissingTemplateAndState(t *testing.T) {
 
 // TestTemplateHelpers covers renderPanelTemplate and renderPanel success/failure paths.
 func TestTemplateHelpers(t *testing.T) {
-	t.Chdir(projectRoot(t))
-	app, err := New()
+	app, err := New(testTemplateFS(t), testStaticFS(t))
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -103,8 +106,7 @@ func TestTemplateHelpers(t *testing.T) {
 
 // TestRouteHandlers exercises each HTTP handler for full-page vs HTMX behavior.
 func TestRouteHandlers(t *testing.T) {
-	t.Chdir(projectRoot(t))
-	app, err := New()
+	app, err := New(testTemplateFS(t), testStaticFS(t))
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -220,8 +222,7 @@ func TestHandleShellErrorBranches(t *testing.T) {
 
 // TestRegisterRoutes checks static asset wiring through a live ServeMux.
 func TestRegisterRoutes(t *testing.T) {
-	t.Chdir(projectRoot(t))
-	app, err := New()
+	app, err := New(testTemplateFS(t), testStaticFS(t))
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -268,19 +269,17 @@ func TestHealthJSONMarshaling(t *testing.T) {
 	}
 }
 
-// TestLoadTemplatesFailure expects ParseGlob to fail when no template files exist.
+// TestLoadTemplatesFailure expects ParseFS to fail when no template files exist.
 func TestLoadTemplatesFailure(t *testing.T) {
-	t.Chdir(t.TempDir())
-	_, err := loadTemplates()
+	_, err := loadTemplates(fstest.MapFS{})
 	if err == nil {
-		t.Fatal("expected loadTemplates to fail in empty temp dir")
+		t.Fatal("expected loadTemplates to fail with empty template fs")
 	}
 }
 
 // TestNewFailure ensures New returns an error when templates cannot be loaded.
 func TestNewFailure(t *testing.T) {
-	t.Chdir(t.TempDir())
-	_, err := New()
+	_, err := New(fstest.MapFS{}, os.DirFS(t.TempDir()))
 	if err == nil {
 		t.Fatal("expected New to fail when templates are unavailable")
 	}
@@ -288,8 +287,7 @@ func TestNewFailure(t *testing.T) {
 
 // TestHandleCreateTaskParseError returns 400 when the form body is not parseable.
 func TestHandleCreateTaskParseError(t *testing.T) {
-	t.Chdir(projectRoot(t))
-	app, err := New()
+	app, err := New(testTemplateFS(t), testStaticFS(t))
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -311,6 +309,18 @@ func projectRoot(t *testing.T) string {
 	}
 	// pkg/ui/ui_test.go -> project root is two dirs up.
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+}
+
+// testStaticFS points at web/static under the module root.
+func testStaticFS(t *testing.T) fs.FS {
+	t.Helper()
+	return os.DirFS(filepath.Join(projectRoot(t), "web", "static"))
+}
+
+// testTemplateFS points at web/templates under the module root.
+func testTemplateFS(t *testing.T) fs.FS {
+	t.Helper()
+	return os.DirFS(filepath.Join(projectRoot(t), "web", "templates"))
 }
 
 // templateMust builds a minimal valid template set for health/degraded tests in isolation.

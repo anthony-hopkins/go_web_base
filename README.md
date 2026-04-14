@@ -63,8 +63,8 @@ graph LR
 1. Client sends request to the service (commonly through Nginx).
 2. Server middleware applies recovery, request ID, security headers, CORS, logging, and body limits.
 3. `http.ServeMux` dispatches to UI routes (`pkg/ui`) or platform routes (`/health`, `/readyz`, `/livez`, `/metrics`, etc.).
-4. UI handlers read/update in-memory state and render templates from `web/templates`.
-5. HTML (full shell or HTMX fragment) is returned; CSS is served from `web/static`.
+4. UI handlers read/update in-memory state and render templates embedded at build time from `web/templates` (`//go:embed` in `main`, loaded via `template.ParseFS`).
+5. HTML (full shell or HTMX fragment) is returned; CSS and other static files under `web/static` are embedded the same way and served via `io/fs`, so neither templates nor assets depend on the process working directory at runtime.
 
 ## HTMX fragment lifecycle
 
@@ -180,12 +180,12 @@ Practical result:
 
 ### `pkg/ui` responsibilities
 
-- Parse templates from `web/templates/*.gohtml` at startup (fail-fast).
+- Parse templates from embedded `web/templates/*.gohtml` at startup (fail-fast; source files still live under `web/` for editing).
 - Register UI routes:
   - `GET /` -> full shell HTML (dashboard panel)
   - `GET /ui/dashboard`, `GET /ui/tasks`, `GET /ui/settings` -> full shell HTML when the request is not from HTMX (normal navigation, refresh, `curl`); **fragment only** when the `HX-Request: true` header is present (HTMX in-page swaps)
   - `POST /ui/tasks` -> task mutation + tasks panel as full shell or fragment, using the same HTMX rule
-  - `GET /assets/*` -> static assets from `web/static`
+  - `GET /assets/*` -> static assets from `web/static` (embedded at link time, not read from disk at runtime)
 - Maintain a thread-safe in-memory state (`sync.RWMutex`) for SPA data.
 - Render panel fragments and the full shell document using Go templates only.
 
@@ -271,6 +271,7 @@ server {
   - `http_requests_total`
   - `http_request_duration_seconds`
   - `panics_total`
+- The request counter and histogram use a `route` label (the `net/http` ServeMux registration pattern, e.g. `GET /users/{id}`), not raw `URL.Path`, so label cardinality stays bounded. Update dashboards or alerts that referenced the former `path` label.
 
 ## Environment variables
 
@@ -436,7 +437,7 @@ If the final `rg` command does not match, coverage is below target and the comma
    For each new function, add at least one passing and one failing/degraded test case.
 
 5. **Keep tests deterministic**  
-   Use `t.TempDir()` and `t.Chdir()` when testing template/static file discovery, and avoid reliance on external services.
+   Prefer passing an explicit `fs.FS` (e.g. `os.DirFS` to the repo’s `web/templates` / `web/static`) over relying on `cwd`; use `t.TempDir()` when simulating missing assets. Avoid reliance on external services.
 
 6. **Update docs with behavior changes**  
    When tests reveal or enforce new behavior, update this README and endpoint examples in the same change.

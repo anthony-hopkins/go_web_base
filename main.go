@@ -2,11 +2,13 @@
 // loads server and UI modules, registers liveness/readiness-style JSON endpoints and the
 // HTML UI, then blocks in the HTTP server until shutdown. Injectable function variables
 // (loadConfigFunc, newServerFunc, newUIFunc, exitFunc) exist primarily for tests.
+// newUIFunc receives embedded template and static filesystems (web/templates, web/static) after fs.Sub.
 package main
 
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -26,7 +28,7 @@ type appServer interface {
 var (
 	loadConfigFunc = server.LoadConfig
 	newServerFunc  = func(cfg server.Config) appServer { return server.New(cfg) }
-	newUIFunc      = ui.New
+	newUIFunc      = func(templateFS, staticFS fs.FS) (*ui.App, error) { return ui.New(templateFS, staticFS) }
 	exitFunc       = os.Exit
 )
 
@@ -65,7 +67,15 @@ func run() error {
 	// The Server struct (from the pkg/server package) encapsulates the
 	// http.Server, routing logic, and middleware stack.
 	srv := newServerFunc(cfg)
-	spaApp, err := newUIFunc()
+	templateRoot, err := fs.Sub(webTemplates, "web/templates")
+	if err != nil {
+		return fmt.Errorf("html templates: %w", err)
+	}
+	staticRoot, err := fs.Sub(webStatic, "web/static")
+	if err != nil {
+		return fmt.Errorf("static assets: %w", err)
+	}
+	spaApp, err := newUIFunc(templateRoot, staticRoot)
 	if err != nil {
 		return fmt.Errorf("failed to initialize SPA app: %w", err)
 	}

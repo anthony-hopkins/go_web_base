@@ -2,7 +2,7 @@ package ui
 
 import (
 	"fmt"
-	"os"
+	"io/fs"
 	"strings"
 	"time"
 )
@@ -16,7 +16,7 @@ type HealthResponse struct {
 	Checks    map[string]string `json:"checks"`
 }
 
-// Health evaluates template availability, in-memory state, and static CSS on disk.
+// Health evaluates template availability, in-memory state, and static CSS in staticFS.
 // Orchestrators can use the aggregated status for readiness; /livez remains a trivial OK.
 func (a *App) Health() HealthResponse {
 	checks := map[string]string{
@@ -36,7 +36,7 @@ func (a *App) Health() HealthResponse {
 		checks["state_initialized"] = "failed"
 	}
 
-	if _, err := os.Stat("web/static/app.css"); err != nil {
+	if _, err := fs.Stat(a.staticFS, "app.css"); err != nil {
 		checks["static_css_present"] = fmt.Sprintf("failed: %v", err)
 	}
 

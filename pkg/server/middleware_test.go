@@ -218,6 +218,18 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+func TestMetricRouteLabel(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/users/123", nil)
+	if got := metricRouteLabel(req); got != "unmatched" {
+		t.Fatalf("without Pattern, want unmatched, got %q", got)
+	}
+	req.Pattern = "GET /users/{id}"
+	if got := metricRouteLabel(req); got != "GET /users/{id}" {
+		t.Fatalf("with Pattern set, got %q", got)
+	}
+}
+
 // TestResponseWriterAndLoggingMiddleware ensures status capture and handler invocation.
 func TestResponseWriterAndLoggingMiddleware(t *testing.T) {
 	t.Parallel()

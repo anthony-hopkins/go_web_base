@@ -66,6 +66,16 @@ func getLogger(r *http.Request) *slog.Logger {
 	return slog.Default()
 }
 
+// metricRouteLabel returns the ServeMux pattern matched for this request (Go 1.22+ Request.Pattern).
+// Using the registered pattern keeps Prometheus label cardinality bounded (e.g. /users/{id} not /users/123).
+// When Pattern is unset (handler invoked outside ServeMux matching, or unmatched request), returns "unmatched".
+func metricRouteLabel(r *http.Request) string {
+	if p := r.Pattern; p != "" {
+		return p
+	}
+	return "unmatched"
+}
+
 // recoveryMiddleware provides a safety net for the application. It uses a deferred 'recover()'
 // to catch any runtime panics during request processing, logs the error with its request ID
 // and stack trace context, and returns a generic '500 Internal Server Error' to the client.
@@ -229,9 +239,10 @@ func (rw *responseWriter) WriteHeader(code int) {
 // loggingMiddleware provides high-level observability for every request.
 // It records:
 // 1. Request execution time (latency).
-// 2. HTTP method, path, and remote address.
+// 2. HTTP method, request URL path, and remote address (logs use r.URL.Path for debugging).
 // 3. Response status code.
-// It also updates Prometheus metrics (http_requests_total and http_request_duration_seconds).
+// It also updates Prometheus metrics (http_requests_total and http_request_duration_seconds)
+// using metricRouteLabel (ServeMux pattern), not r.URL.Path.
 func loggingMiddleware(next http.Handler, trustProxy bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -260,8 +271,9 @@ func loggingMiddleware(next http.Handler, trustProxy bool) http.Handler {
 
 		// Update Prometheus metrics for observability.
 		statusStr := strconv.Itoa(rw.statusCode)
-		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusStr).Inc()
-		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration.Seconds())
+		route := metricRouteLabel(r)
+		httpRequestsTotal.WithLabelValues(r.Method, route, statusStr).Inc()
+		httpRequestDuration.WithLabelValues(r.Method, route).Observe(duration.Seconds())
 	})
 }
 

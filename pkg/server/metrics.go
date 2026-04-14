@@ -12,24 +12,24 @@ var (
 	// httpRequestsTotal is a Prometheus counter that tracks the total number of HTTP requests processed.
 	// It is partitioned by:
 	// - method: The HTTP verb (GET, POST, etc.)
-	// - path: The request URI path.
+	// - route: The ServeMux registration pattern (not r.URL.Path), for bounded cardinality.
 	// - status: The HTTP response status code (e.g., 200, 404, 500).
 	httpRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "http_requests_total",
-		Help: "Total number of HTTP requests processed by the server, partitioned by method, path, and status code.",
-	}, []string{"method", "path", "status"})
+		Help: "Total number of HTTP requests processed by the server, partitioned by method, route pattern, and status code.",
+	}, []string{"method", "route", "status"})
 
 	// httpRequestDuration is a Prometheus histogram that tracks the duration of HTTP requests in seconds.
 	// It provides insights into latency across different endpoints and methods.
 	// It is partitioned by:
 	// - method: The HTTP verb.
-	// - path: The request URI path.
+	// - route: The ServeMux registration pattern (not r.URL.Path), for bounded cardinality.
 	// It uses default Prometheus buckets for distribution.
 	httpRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "http_request_duration_seconds",
-		Help:    "Duration of HTTP requests in seconds, partitioned by method and path.",
+		Help:    "Duration of HTTP requests in seconds, partitioned by method and route pattern.",
 		Buckets: prometheus.DefBuckets,
-	}, []string{"method", "path"})
+	}, []string{"method", "route"})
 
 	// panicsTotal is a Prometheus counter that tracks the total number of unexpected application panics
 	// that were successfully caught and recovered by the recoveryMiddleware.
