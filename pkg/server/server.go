@@ -15,6 +15,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+var signalNotify = signal.Notify
+var listenAndServe = func(s *http.Server) error { return s.ListenAndServe() }
+var listenAndServeTLS = func(s *http.Server) error { return s.ListenAndServeTLS("", "") }
+var shutdownServer = func(s *http.Server, ctx context.Context) error { return s.Shutdown(ctx) }
+
 // Server represents the core HTTP/HTTPS server component.
 // It manages the request router (mux), the underlying http.Server,
 // and the application's configuration.
@@ -55,7 +60,7 @@ func (s *Server) HandleProtectedFunc(pattern string, handler func(http.ResponseW
 
 // Start orchestrates the complete server lifecycle. It performs the following steps:
 // 1. Registers the /metrics endpoint for Prometheus scraping.
-// 2. Initializes the middleware stack (Recovery, Request ID, Security, Logging).
+// 2. Initializes the middleware stack (Recovery, Request ID, Security, CORS, Logging).
 // 3. Configures TLS settings, loading manual certificates if provided.
 // 4. Starts the main HTTP(S) listener in a goroutine.
 // 5. Blocks until an OS termination signal is received, then initiates a graceful shutdown.
@@ -69,10 +74,12 @@ func (s *Server) Start() error {
 	// 1. recoveryMiddleware: Catches and logs panics.
 	// 2. requestIDMiddleware: Assigns a unique ID to each request.
 	// 3. securityHeadersMiddleware: Adds security-related HTTP headers.
-	// 4. loggingMiddleware: Records request details and metrics (client IP respects TRUST_PROXY).
+	// 4. corsMiddleware: Enforces explicit cross-origin policy and handles preflight requests.
+	// 5. loggingMiddleware: Records request details and metrics (client IP respects TRUST_PROXY).
 	handler := recoveryMiddleware(s.mux)
 	handler = requestIDMiddleware(handler)
 	handler = securityHeadersMiddleware(handler)
+	handler = corsMiddleware(handler, s.cfg)
 	handler = loggingMiddleware(handler, s.cfg.TrustProxy)
 
 	// Wrap the final handler with MaxBytesHandler.
@@ -118,7 +125,7 @@ func (s *Server) Start() error {
 	// --- Graceful Shutdown Setup ---
 	// Notify the 'quit' channel on OS interrupt or termination signals.
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	signalNotify(quit, os.Interrupt, syscall.SIGTERM)
 
 	// Start the server in a non-blocking goroutine.
 	go func() {
@@ -129,10 +136,10 @@ func (s *Server) Start() error {
 		if isTLS {
 			// ListenAndServeTLS starts the server with HTTPS.
 			// Cert/Key files are empty here because they were already loaded into tlsConfig.
-			err = s.server.ListenAndServeTLS("", "")
+			err = listenAndServeTLS(s.server)
 		} else {
 			// ListenAndServe starts the server with plain HTTP.
-			err = s.server.ListenAndServe()
+			err = listenAndServe(s.server)
 		}
 
 		// http.ErrServerClosed is returned when Shutdown() is called, so it's not a fatal error.
@@ -155,7 +162,7 @@ func (s *Server) Start() error {
 
 	// Shutdown() gracefully stops the server by closing all listeners and
 	// then waiting for active connections to become idle or for the context to timeout.
-	if err := s.server.Shutdown(ctx); err != nil {
+	if err := shutdownServer(s.server, ctx); err != nil {
 		return fmt.Errorf("server forced to shutdown: %w", err)
 	}
 

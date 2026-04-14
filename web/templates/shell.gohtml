@@ -1,0 +1,26 @@
+{{ define "shell" }}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ .Title }}</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div class="layout">
+    <header class="app-header">
+      <h1>{{ .Title }}</h1>
+      <p>Rendered at {{ .Now }} | HTMX + html/template</p>
+    </header>
+    <nav class="nav-panel" aria-label="Primary navigation">
+      <button class="nav-btn" hx-get="/ui/dashboard" hx-target="#spa-content" hx-swap="innerHTML" hx-push-url="true">Dashboard</button>
+      <button class="nav-btn" hx-get="/ui/tasks" hx-target="#spa-content" hx-swap="innerHTML" hx-push-url="true">Tasks</button>
+      <button class="nav-btn" hx-get="/ui/settings" hx-target="#spa-content" hx-swap="innerHTML" hx-push-url="true">Settings</button>
+    </nav>
+    <main id="spa-content" class="content-panel" aria-live="polite">{{ .Content }}</main>
+  </div>
+</body>
+</html>
+{{ end }}

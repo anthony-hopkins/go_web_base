@@ -1,0 +1,130 @@
+:root {
+  color-scheme: dark;
+  --aws-bg: #252f3e;
+  --aws-panel: #1f2937;
+  --aws-border: #465266;
+  --aws-text: #f1f5f9;
+  --aws-muted: #cbd5e1;
+  --aws-button: #ff9900;
+  --aws-button-text: #161b22;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+  background: var(--aws-bg);
+  color: var(--aws-text);
+}
+
+.layout {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.app-header {
+  background: var(--aws-panel);
+  border: 1px solid var(--aws-border);
+  border-radius: 0.75rem;
+  padding: 1rem 1.2rem;
+}
+
+.app-header h1 {
+  margin: 0 0 0.35rem 0;
+}
+
+.app-header p {
+  margin: 0;
+  color: var(--aws-muted);
+}
+
+.nav-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.nav-btn,
+.task-form button {
+  border: 0;
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.9rem;
+  font-weight: 600;
+  background: var(--aws-button);
+  color: var(--aws-button-text);
+  cursor: pointer;
+}
+
+.nav-btn:hover,
+.task-form button:hover {
+  filter: brightness(1.06);
+}
+
+.content-panel {
+  background: var(--aws-panel);
+  border: 1px solid var(--aws-border);
+  border-radius: 0.75rem;
+  padding: 1rem 1.2rem;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.card {
+  border: 1px solid var(--aws-border);
+  border-radius: 0.6rem;
+  padding: 0.8rem;
+  background: #111827;
+}
+
+.card h3 {
+  margin-top: 0;
+}
+
+.task-form {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.task-form input {
+  width: 100%;
+  border: 1px solid var(--aws-border);
+  border-radius: 0.45rem;
+  background: #0f172a;
+  color: var(--aws-text);
+  padding: 0.55rem 0.65rem;
+}
+
+.task-list {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.task-list li {
+  margin-bottom: 0.45rem;
+}
+
+.muted {
+  color: var(--aws-muted);
+}
+
+.status-good {
+  color: #4ade80;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .layout {
+    padding: 0.9rem;
+  }
+}

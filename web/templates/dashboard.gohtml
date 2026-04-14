@@ -1,0 +1,20 @@
+{{ define "dashboard" }}
+<section>
+  <h2>Service Dashboard</h2>
+  <div class="card-grid">
+    <article class="card">
+      <h3>Status</h3>
+      <p class="status-good">{{ .ServiceState }}</p>
+    </article>
+    <article class="card">
+      <h3>Tasks Tracked</h3>
+      <p>{{ len .Tasks }}</p>
+    </article>
+    <article class="card">
+      <h3>Last Updated</h3>
+      <p>{{ .LastUpdated }}</p>
+    </article>
+  </div>
+  <p class="muted">Server time: {{ .Now }}</p>
+</section>
+{{ end }}

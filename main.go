@@ -1,11 +1,27 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 
 	"github.com/anthony-hopkins/rest_api_template/pkg/server"
+	"github.com/anthony-hopkins/rest_api_template/pkg/ui"
+)
+
+type appServer interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+	Handle(pattern string, handler http.Handler)
+	Start() error
+}
+
+var (
+	loadConfigFunc = server.LoadConfig
+	newServerFunc  = func(cfg server.Config) appServer { return server.New(cfg) }
+	newUIFunc      = ui.New
+	exitFunc       = os.Exit
 )
 
 // main is the application's entry point.
@@ -16,6 +32,13 @@ import (
 // 4. Defines HTTP routes and their respective handlers.
 // 5. Starts the server lifecycle and blocks until termination.
 func main() {
+	if err := run(); err != nil {
+		slog.Error("Application startup failed", "error", err)
+		exitFunc(1)
+	}
+}
+
+func run() error {
 	// Initialize structured logging.
 	// We use slog.NewJSONHandler to output logs in a format that's easily
 	// parsed by log aggregation tools like ELK, Splunk, or Datadog.
@@ -25,40 +48,64 @@ func main() {
 	// Load and validate application configuration.
 	// This function handles reading from .env files and ensuring required
 	// variables like API_KEY and DOMAIN are present.
-	cfg, err := server.LoadConfig()
+	cfg, err := loadConfigFunc()
 	if err != nil {
-		slog.Error("Configuration error", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("configuration error: %w", err)
 	}
 
 	// Create a new Server instance.
 	// The Server struct (from the pkg/server package) encapsulates the
 	// http.Server, routing logic, and middleware stack.
-	srv := server.New(cfg)
+	srv := newServerFunc(cfg)
+	spaApp, err := newUIFunc()
+	if err != nil {
+		return fmt.Errorf("failed to initialize SPA app: %w", err)
+	}
 
 	// Define the /health endpoint.
-	// This is a common pattern for "Liveness" and "Readiness" checks in
-	// containerized environments like Kubernetes.
+	// /health provides a detailed report suitable for diagnostics.
 	srv.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
-	})
+		report := spaApp.Health()
+		statusCode := http.StatusOK
+		if report.Status != "ok" {
+			statusCode = http.StatusServiceUnavailable
+		}
 
-	// Define the root endpoint (/).
-	// We use the enhanced http.ServeMux (introduced in Go 1.22) which
-	// allows specifying the HTTP method directly in the pattern string.
-	srv.HandleProtectedFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		_, err := w.Write([]byte("Hello over HTTPS"))
-		if err != nil {
-			slog.Error("Failed to write response", "error", err)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(statusCode)
+		if err := json.NewEncoder(w).Encode(report); err != nil {
+			slog.Error("Failed to write health response", "error", err)
 		}
 	})
+	// /livez is a lightweight liveness probe for process health.
+	srv.HandleFunc("GET /livez", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	// /readyz is a readiness probe with the same concrete checks as /health.
+	srv.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		report := spaApp.Health()
+		statusCode := http.StatusOK
+		if report.Status != "ok" {
+			statusCode = http.StatusServiceUnavailable
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(statusCode)
+		if err := json.NewEncoder(w).Encode(report); err != nil {
+			slog.Error("Failed to write readiness response", "error", err)
+		}
+	})
+
+	// Register all SPA routes and UI asset handlers from the ui package.
+	spaApp.RegisterRoutes(srv)
 
 	// Start the server.
 	// This call is blocking and will only return after the server
 	// shuts down gracefully (or fails to start).
 	if err := srv.Start(); err != nil {
-		slog.Error("Server error", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("server error: %w", err)
 	}
+	return nil
 }

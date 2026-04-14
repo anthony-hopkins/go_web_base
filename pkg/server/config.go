@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"log/slog"
@@ -23,10 +25,16 @@ type Config struct {
 	HTTPSPort           string        // HTTPSPort is the network address (e.g., ":443") where the server listens for secure HTTPS traffic.
 	TLSCertFile         string        // TLSCertFile is the file path to the manually-provided X.509 certificate file.
 	TLSKeyFile          string        // TLSKeyFile is the file path to the private key matching the manually-provided certificate.
-	TrustProxy      bool          // TrustProxy, when true, uses X-Forwarded-For (first hop) for the client IP in structured logs (use behind Nginx/reverse proxies).
-	MaxHeaderBytes  int           // MaxHeaderBytes specifies the maximum size in bytes that the server will accept in HTTP headers.
-	MaxBodyBytes    int64         // MaxBodyBytes restricts the maximum allowed size of the HTTP request body to prevent memory issues.
-	ShutdownTimeout time.Duration // ShutdownTimeout is the maximum time to allow for active requests to finish during a graceful shutdown.
+	TrustProxy          bool          // TrustProxy, when true, uses X-Forwarded-For (first hop) for the client IP in structured logs (use behind Nginx/reverse proxies).
+	MaxHeaderBytes      int           // MaxHeaderBytes specifies the maximum size in bytes that the server will accept in HTTP headers.
+	MaxBodyBytes        int64         // MaxBodyBytes restricts the maximum allowed size of the HTTP request body to prevent memory issues.
+	ShutdownTimeout     time.Duration // ShutdownTimeout is the maximum time to allow for active requests to finish during a graceful shutdown.
+	CORSAllowedOrigins  []string      // CORSAllowedOrigins defines which browser origins may call this API (exact match or "*" when credentials are off).
+	CORSAllowedMethods  []string      // CORSAllowedMethods defines allowed CORS request methods for preflight and response headers.
+	CORSAllowedHeaders  []string      // CORSAllowedHeaders defines allowed request headers for CORS preflight checks.
+	CORSExposedHeaders  []string      // CORSExposedHeaders defines response headers exposed to browser JavaScript.
+	CORSAllowCredentials bool         // CORSAllowCredentials controls Access-Control-Allow-Credentials for trusted cross-origin calls.
+	CORSMaxAgeSeconds   int           // CORSMaxAgeSeconds caches successful preflight checks in browsers.
 }
 
 // LoadConfig attempts to read configuration from environment variables.
@@ -83,16 +91,57 @@ func LoadConfig() (Config, error) {
 		return Config{}, fmt.Errorf("invalid SHUTDOWN_TIMEOUT: %w", err)
 	}
 
+	corsAllowedOrigins := parseCSV(os.Getenv("CORS_ALLOWED_ORIGINS"))
+	corsAllowedMethods := parseCSV(cmp.Or(os.Getenv("CORS_ALLOWED_METHODS"), "GET,POST,PUT,PATCH,DELETE,OPTIONS"))
+	corsAllowedHeaders := parseCSV(cmp.Or(os.Getenv("CORS_ALLOWED_HEADERS"), "Accept,Authorization,Content-Type,X-API-Key,X-Requested-With"))
+	corsExposedHeaders := parseCSV(cmp.Or(os.Getenv("CORS_EXPOSED_HEADERS"), "X-Request-ID"))
+	corsAllowCredentials, err := strconv.ParseBool(cmp.Or(os.Getenv("CORS_ALLOW_CREDENTIALS"), "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid CORS_ALLOW_CREDENTIALS: %w", err)
+	}
+	corsMaxAgeSeconds, err := strconv.Atoi(cmp.Or(os.Getenv("CORS_MAX_AGE_SECONDS"), "600"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid CORS_MAX_AGE_SECONDS: %w", err)
+	}
+	if corsMaxAgeSeconds < 0 {
+		return Config{}, errors.New("CORS_MAX_AGE_SECONDS must be >= 0")
+	}
+	if corsAllowCredentials && slices.Contains(corsAllowedOrigins, "*") {
+		return Config{}, errors.New("CORS_ALLOWED_ORIGINS cannot contain '*' when CORS_ALLOW_CREDENTIALS=true")
+	}
+
 	// Return the fully populated Config struct.
 	return Config{
-		APIKey:          apiKey,
-		Domain:          domain,
-		HTTPSPort:       httpsPort,
-		TLSCertFile:     tlsCertFile,
-		TLSKeyFile:      tlsKeyFile,
-		TrustProxy:      trustProxy,
-		MaxHeaderBytes:  maxHeaderBytes,
-		MaxBodyBytes:    maxBodyBytes,
-		ShutdownTimeout: shutdownTimeout,
+		APIKey:               apiKey,
+		Domain:               domain,
+		HTTPSPort:            httpsPort,
+		TLSCertFile:          tlsCertFile,
+		TLSKeyFile:           tlsKeyFile,
+		TrustProxy:           trustProxy,
+		MaxHeaderBytes:       maxHeaderBytes,
+		MaxBodyBytes:         maxBodyBytes,
+		ShutdownTimeout:      shutdownTimeout,
+		CORSAllowedOrigins:   corsAllowedOrigins,
+		CORSAllowedMethods:   corsAllowedMethods,
+		CORSAllowedHeaders:   corsAllowedHeaders,
+		CORSExposedHeaders:   corsExposedHeaders,
+		CORSAllowCredentials: corsAllowCredentials,
+		CORSMaxAgeSeconds:    corsMaxAgeSeconds,
 	}, nil
+}
+
+func parseCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	rawValues := strings.Split(value, ",")
+	values := make([]string, 0, len(rawValues))
+	for _, raw := range rawValues {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		values = append(values, trimmed)
+	}
+	return values
 }

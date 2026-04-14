@@ -2,17 +2,20 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var randRead = rand.Read
 
 // requestIDKey is a custom, unexported type used to store and retrieve the request ID
 // from the request context. Using a dedicated type prevents key collisions with other packages.
@@ -31,7 +34,7 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 		// Generate 8 bytes of random data for the request ID.
 		// We use crypto/rand for high-quality entropy to minimize collisions.
 		b := make([]byte, 8)
-		if _, err := rand.Read(b); err != nil {
+		if _, err := randRead(b); err != nil {
 			// Fallback: If the cryptographic RNG fails (rare), use nanosecond timestamp as entropy.
 			slog.Error("Failed to generate cryptographic request ID, using timestamp fallback", "error", err)
 			b = []byte(fmt.Sprintf("%08x", time.Now().UnixNano()))[:8]
@@ -111,6 +114,80 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// corsMiddleware enforces explicit cross-origin browser access rules.
+// It supports exact-origin allowlists, optional wildcard mode ("*"), credential gating,
+// and full CORS preflight responses for OPTIONS requests.
+func corsMiddleware(next http.Handler, cfg Config) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		allowedOrigin, ok := allowedCORSOrigin(origin, cfg.CORSAllowedOrigins)
+		if !ok {
+			if isCORSPreflight(r) {
+				http.Error(w, "Forbidden origin", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		headers := w.Header()
+		headers.Set("Vary", "Origin")
+		headers.Set("Access-Control-Allow-Origin", allowedOrigin)
+		if cfg.CORSAllowCredentials {
+			headers.Set("Access-Control-Allow-Credentials", "true")
+		}
+		if len(cfg.CORSExposedHeaders) > 0 {
+			headers.Set("Access-Control-Expose-Headers", strings.Join(cfg.CORSExposedHeaders, ", "))
+		}
+
+		if !isCORSPreflight(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		requestedMethod := r.Header.Get("Access-Control-Request-Method")
+		if len(cfg.CORSAllowedMethods) > 0 && !slices.Contains(cfg.CORSAllowedMethods, requestedMethod) {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		headers.Add("Vary", "Access-Control-Request-Method")
+		headers.Add("Vary", "Access-Control-Request-Headers")
+		if len(cfg.CORSAllowedMethods) > 0 {
+			headers.Set("Access-Control-Allow-Methods", strings.Join(cfg.CORSAllowedMethods, ", "))
+		}
+		if len(cfg.CORSAllowedHeaders) > 0 {
+			headers.Set("Access-Control-Allow-Headers", strings.Join(cfg.CORSAllowedHeaders, ", "))
+		}
+		if cfg.CORSMaxAgeSeconds > 0 {
+			headers.Set("Access-Control-Max-Age", strconv.Itoa(cfg.CORSMaxAgeSeconds))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func allowedCORSOrigin(origin string, allowedOrigins []string) (string, bool) {
+	if len(allowedOrigins) == 0 {
+		return "", false
+	}
+	if slices.Contains(allowedOrigins, "*") {
+		return "*", true
+	}
+	if slices.Contains(allowedOrigins, origin) {
+		return origin, true
+	}
+	return "", false
+}
+
+func isCORSPreflight(r *http.Request) bool {
+	return r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
 }
 
 // clientIP returns the best-effort client address for logging. When trustProxy is true

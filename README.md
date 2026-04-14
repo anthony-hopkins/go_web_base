@@ -1,46 +1,248 @@
-# Secure Go REST API Template
+# Secure Go Web Template
 
-A robust, production-ready Go REST API template featuring modern Go 1.26 idioms, manual TLS certificate loading, and observability. **HTTP rate limiting is intentionally not implemented in the application**; it is expected to be enforced by a reverse proxy such as **Nginx** in front of this service.
+Production-oriented Go web template built with standard library primitives, server-rendered HTML templates, HTMX-driven SPA-style interactions, and explicit security middleware.  
+Rate limiting is **not** implemented in-process; enforce it at the edge (for example, Nginx).
 
-## Project Overview
+## What this template provides
 
-This project provides a solid foundation for building secure web services in Go. It handles the “boring but critical” parts of a production service: TLS management, security headers, structured logging, and monitoring. Per-client throttling and abuse protection at the edge are delegated to the proxy tier so the Go process stays simpler and policy stays centralized.
+- TLS-ready HTTP server lifecycle with graceful shutdown.
+- Security middleware (headers, panic recovery, request IDs, body/header limits).
+- Explicit CORS policy controls through environment variables.
+- Structured JSON logging with request correlation and Prometheus metrics.
+- Server-rendered SPA-style UI using Go `html/template` + HTMX (no frontend framework).
+- Modular UI package and separated templates/CSS for maintainability.
 
-### Key Features
+## Architecture at a glance
 
-- **TLS Management**: Manual loading of X.509 certificates for secure communication.
-- **Modern Security**:
-    - Enforced **TLS 1.3** and secure cipher suites.
-    - Comprehensive security headers (HSTS, CSP, X-Frame-Options, etc.) to mitigate XSS and clickjacking.
-    - Request body size limiting to reduce memory exhaustion risk from huge uploads.
-    - Panic recovery middleware for high availability and failure containment.
-- **Observability**:
-    - Structured JSON logging using `log/slog`, optimized for log aggregation.
-    - Native Prometheus metrics endpoint (`/metrics`) tracking request volume, latency, errors, and panics.
-    - Standardized request tracing with unique Request IDs (`X-Request-ID`).
-- **Reverse-proxy friendly**:
-    - Optional `TRUST_PROXY=true` uses the first hop in `X-Forwarded-For` for the `ip` field in structured logs (use when Nginx or another proxy forwards the real client address).
-- **Modern Go Idioms**: Uses Go 1.26 features like `cmp.Or` for configuration defaults, `slog` for logging, and the enhanced `http.ServeMux` for clean, method-based routing.
+The app is intentionally split into two runtime layers:
 
-## Deployment note: rate limiting
+1. **Core HTTP platform** (`pkg/server`)
+   - Configuration loading and validation.
+   - Middleware chain and server startup/shutdown.
+   - Metrics endpoint registration.
+2. **UI module** (`pkg/ui`)
+   - SPA route registration.
+   - In-memory UI state management.
+   - Template loading and fragment rendering.
 
-Configure request limits (e.g. `limit_req`, connection limits, or WAF rules) in **Nginx** (or your edge) rather than in this binary. The app does not emit `429` from an internal limiter.
+`main.go` is intentionally small: initialize logger -> load config -> build server -> build UI module -> register routes -> start server.
 
-### Example: Nginx `limit_req`
+## Architecture diagram
 
-Below is a minimal example showing per-client request throttling at the edge. Adjust rates/bursts for your traffic profile.
+```mermaid
+flowchart TD
+    U[Browser / Client] -->|HTTP Request| M[Middleware Chain]
+    M --> R[Go ServeMux Routes]
+
+    subgraph Middleware_Order[Middleware Order]
+      M1[recoveryMiddleware]
+      M2[requestIDMiddleware]
+      M3[securityHeadersMiddleware]
+      M4[corsMiddleware]
+      M5[loggingMiddleware]
+      M6[MaxBytesHandler]
+      M1 --> M2 --> M3 --> M4 --> M5 --> M6
+    end
+
+    M --> Middleware_Order
+    R -->|UI routes| UI[pkg/ui]
+    R -->|platform routes| S[pkg/server]
+
+    UI --> T[web/templates/*.gohtml]
+    UI --> C[web/static/app.css]
+    UI --> ST[(in-memory UI state)]
+
+    S --> CFG[pkg/server/config.go]
+    S --> MET[/metrics endpoint]
+    S --> TLS[TLS + graceful shutdown]
+
+    N[Nginx / Edge Proxy] -->|TLS termination, rate limiting, forwarding| U
+```
+
+### End-to-end request sequence
+
+1. Client sends request to the service (commonly through Nginx).
+2. Server middleware applies recovery, request ID, security headers, CORS, logging, and body limits.
+3. `http.ServeMux` dispatches to UI routes (`pkg/ui`) or platform routes (`/health`, `/readyz`, `/livez`, `/metrics`, etc.).
+4. UI handlers read/update in-memory state and render templates from `web/templates`.
+5. HTML (full shell or HTMX fragment) is returned; CSS is served from `web/static`.
+
+## HTMX fragment lifecycle
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant S as Go Server
+    participant U as pkg/ui
+    participant T as Templates
+    participant ST as In-memory State
+
+    B->>S: GET /
+    S->>U: handleShell()
+    U->>ST: snapshot()
+    U->>T: render "dashboard" fragment
+    U->>T: render "shell" with initial fragment
+    U-->>B: Full HTML shell
+
+    B->>S: hx-get /ui/tasks
+    S->>U: handleTasks()
+    U->>ST: snapshot()
+    U->>T: render "tasks" fragment
+    U-->>B: HTML fragment (swap into #spa-content)
+
+    B->>S: hx-post /ui/tasks (form data)
+    S->>U: handleCreateTask()
+    U->>ST: addTask()
+    U->>ST: snapshot()
+    U->>T: render updated "tasks" fragment
+    U-->>B: Updated fragment (in-place swap)
+```
+
+### What this means operationally
+
+- Initial page load (`GET /`) renders both shell chrome and first content server-side.
+- HTMX navigation (`hx-get`) fetches only panel fragments, reducing payload size.
+- HTMX form posts (`hx-post`) mutate server state and immediately return updated HTML.
+- No frontend build pipeline or framework runtime is required for interactive flows.
+
+### HTMX troubleshooting quick reference
+
+| Symptom | Likely cause | Quick check | Fix |
+|---|---|---|---|
+| Clicking nav button causes full page reload | HTMX script not loaded or blocked | Open page source/devtools and confirm `htmx.org` script is present and loaded | Ensure script tag in `web/templates/shell.gohtml` and allow outbound access to CDN (or vendor HTMX locally) |
+| Fragment does not swap into content area | Wrong `hx-target` selector | Inspect button/form attrs and verify `#spa-content` exists in shell | Keep `id="spa-content"` in shell and `hx-target="#spa-content"` on controls |
+| POST form appears to do nothing | Form parse error or empty `task` value | Check network response status/body for `POST /ui/tasks` | Ensure input has `name="task"` and submit valid non-empty text |
+| Browser console shows CORS errors | Origin not allowed by CORS config | Compare request Origin with `CORS_ALLOWED_ORIGINS` | Add exact origin(s) and restart app; avoid `*` with credentials |
+| Preflight request fails with 403 | Disallowed origin/method/header | Run curl preflight from README and inspect response headers | Update `CORS_ALLOWED_ORIGINS`, `CORS_ALLOWED_METHODS`, `CORS_ALLOWED_HEADERS` |
+| CSS not applied | Static asset route/path mismatch | Request `GET /assets/app.css` directly | Keep file at `web/static/app.css` and route registration in `pkg/ui/app.go` |
+| Template changes not reflected | Server still running old process | Check process start time/logs | Restart `go run main.go` so templates are reloaded at startup |
+
+## Project structure
+
+```text
+go_web_template/
+├── main.go
+├── web/
+│   ├── templates/
+│   │   ├── shell.gohtml
+│   │   ├── dashboard.gohtml
+│   │   ├── tasks.gohtml
+│   │   └── settings.gohtml
+│   └── static/
+│       └── app.css
+├── pkg/
+│   ├── server/
+│   │   ├── config.go
+│   │   ├── middleware.go
+│   │   ├── metrics.go
+│   │   └── server.go
+│   └── ui/
+│       ├── app.go
+│       ├── routes.go
+│       ├── state.go
+│       └── templates.go
+├── .env
+├── go.mod
+└── README.md
+```
+
+## How requests flow through the system
+
+For every request, the server wraps handlers in this middleware order:
+
+1. `recoveryMiddleware`
+2. `requestIDMiddleware`
+3. `securityHeadersMiddleware`
+4. `corsMiddleware`
+5. `loggingMiddleware`
+6. `http.MaxBytesHandler` (body size enforcement)
+
+Practical result:
+
+- Panics are recovered and counted (`panics_total`).
+- Each request receives `X-Request-ID`.
+- Security headers are always set.
+- CORS rules are enforced before handler execution.
+- Request logs include method/path/status/duration/client IP.
+- Oversized request bodies are rejected early.
+
+## Server and UI responsibilities
+
+### `pkg/server` responsibilities
+
+- Load env configuration with defaults (`cmp.Or`) and validation.
+- Build `http.Server` with strict timeouts.
+- Load TLS certificates when provided; otherwise run HTTP mode with warning.
+- Register `/metrics` and run graceful shutdown on `SIGINT/SIGTERM`.
+- Provide helper methods for protected routes (`HandleProtected*`) using `X-API-Key`.
+
+### `pkg/ui` responsibilities
+
+- Parse templates from `web/templates/*.gohtml` at startup (fail-fast).
+- Register UI routes:
+  - `GET /` -> full shell HTML
+  - `GET /ui/dashboard` -> fragment
+  - `GET /ui/tasks` -> fragment
+  - `POST /ui/tasks` -> task mutation + refreshed fragment
+  - `GET /ui/settings` -> fragment
+  - `GET /assets/*` -> static assets from `web/static`
+- Maintain a thread-safe in-memory state (`sync.RWMutex`) for SPA data.
+- Render fragments and full page using Go templates only.
+
+## Frontend approach (without a JS framework)
+
+The UI is "SPA-style" rather than a client-rendered SPA:
+
+- The shell page (`/`) loads once.
+- HTMX requests server-rendered fragments for panel navigation.
+- HTML swaps happen in-page (`hx-target="#spa-content"`).
+- Form submissions (`POST /ui/tasks`) return updated HTML fragments.
+
+This keeps interactivity high while preserving:
+
+- server-side rendering simplicity,
+- no hydration/runtime bundle complexity,
+- strong alignment with Go stdlib and template security model.
+
+## Security model
+
+### TLS
+
+- TLS 1.3 minimum is enforced when cert/key are provided.
+- If TLS cert variables are unset, app runs plain HTTP (intended for local/dev or behind trusted TLS-terminating proxy).
+
+### Security headers
+
+The middleware sets:
+
+- `Strict-Transport-Security`
+- `Content-Security-Policy`
+- `X-Frame-Options`
+- `X-Content-Type-Options`
+- `Referrer-Policy`
+- `Cross-Origin-Opener-Policy`
+- `Cross-Origin-Embedder-Policy`
+- `Cross-Origin-Resource-Policy`
+
+### CORS
+
+- CORS is explicit and deny-by-default for cross-origin browser requests.
+- Allowed origins/methods/headers are controlled by env vars.
+- Preflight (`OPTIONS` + `Access-Control-Request-Method`) is handled in middleware.
+- Credentials mode and wildcard origins are validated for safe combinations.
+
+### Rate limiting
+
+No in-process request throttling is included by design.
+
+Use edge controls (Nginx, gateway, WAF), for example:
 
 ```nginx
-# http {}
 limit_req_zone $binary_remote_addr zone=api_ratelimit:10m rate=10r/s;
 
 server {
-    # ... TLS / upstream config ...
-
     location / {
-        # Allow short bursts while still enforcing a sustained rate.
         limit_req zone=api_ratelimit burst=20 nodelay;
-
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Host $host;
@@ -49,105 +251,191 @@ server {
 }
 ```
 
-If a client exceeds the policy, **Nginx will return `429`** (and the Go service will never see the request).
+## Observability
 
-## Project Structure
+- Structured logs via `log/slog` JSON handler.
+- Request logs include client IP and respect `TRUST_PROXY` (first hop of `X-Forwarded-For`).
+- Health endpoints:
+  - `GET /livez` is lightweight process liveness (`200` when process is running).
+  - `GET /readyz` returns readiness checks and `503` when degraded.
+  - `GET /health` returns the same detailed readiness report for diagnostics.
+- Prometheus metrics:
+  - `http_requests_total`
+  - `http_request_duration_seconds`
+  - `panics_total`
 
-The project follows a clean, modular structure:
-
-```text
-rest_api/
-├── main.go              # Application entry point; wires up the server and routes.
-├── pkg/
-│   └── server/          # Core server logic and middleware.
-│       ├── config.go    # Environment-based configuration loading and validation.
-│       ├── metrics.go   # Prometheus metrics definitions and collectors.
-│       ├── middleware.go# HTTP middleware chain (logging, security, request ID, recovery).
-│       └── server.go    # Server lifecycle management (TLS setup, graceful shutdown).
-├── bin/                 # Compiled binaries (optional).
-├── .env                 # Local environment variables configuration.
-├── go.mod               # Go module definition.
-├── go.sum               # Dependency checksums.
-└── README.md            # You are here.
-```
-
-## Detailed Component Breakdown
-
-### 1. Server Lifecycle (`pkg/server/server.go`)
-
-Manages the HTTP and HTTPS server instantiation. It ensures the primary listener shuts down gracefully when an OS signal (SIGINT/SIGTERM) is received, allowing active connections to complete before exit.
-
-### 2. Configuration (`pkg/server/config.go`)
-
-Loads settings from the environment or a `.env` file using `godotenv`. It validates mandatory fields like `API_KEY` and `DOMAIN` and provides sensible defaults using `cmp.Or`. Rate-limit-related environment variables are not used; configure throttling at the proxy.
-
-### 3. Middlewares (`pkg/server/middleware.go`)
-
-A layered chain of HTTP handlers:
-
-- **Recovery**: Uses `recover()` to catch panics and return 500 status codes.
-- **Request ID**: Assigns an 8-byte unique hex identifier to every request.
-- **Security Headers**: Sets modern browser policies (HSTS, CSP, NoSniff, etc.).
-- **Logging**: Records request metadata (including client IP, honoring `TRUST_PROXY`) and updates Prometheus histograms and counters.
-
-### 4. Metrics (`pkg/server/metrics.go`)
-
-Initializes global Prometheus metrics: `http_requests_total`, `http_request_duration_seconds`, and `panics_total`.
-
-## Environment Variables
+## Environment variables
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `API_KEY` | Secret key for API access | - | Yes |
-| `DOMAIN` | Server domain name | - | Yes |
-| `HTTPS_PORT` | Port for HTTPS traffic | `:443` | No |
-| `TLS_CERT_FILE`| Path to .pem cert file | - | No* |
-| `TLS_KEY_FILE` | Path to .pem key file | - | No* |
-| `TRUST_PROXY` | Use first `X-Forwarded-For` hop for log `ip` | `false` | No |
-| `MAX_HEADER_BYTES` | Max HTTP header size (bytes) | `1048576` | No |
-| `MAX_BODY_BYTES` | Max request body size (bytes) | `10485760` | No |
+| `API_KEY` | Shared key for protected route helpers | - | Yes |
+| `DOMAIN` | Service domain identifier | - | Yes |
+| `HTTPS_PORT` | Bind address/port | `:443` | No |
+| `TLS_CERT_FILE` | Path to TLS certificate PEM | - | No* |
+| `TLS_KEY_FILE` | Path to TLS private key PEM | - | No* |
+| `TRUST_PROXY` | Trust `X-Forwarded-For` first hop for logged client IP | `false` | No |
+| `MAX_HEADER_BYTES` | Max allowed request header size | `1048576` | No |
+| `MAX_BODY_BYTES` | Max allowed request body size | `10485760` | No |
 | `SHUTDOWN_TIMEOUT` | Graceful shutdown timeout | `30s` | No |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated exact origins (or `*` when credentials are off) | empty | No |
+| `CORS_ALLOWED_METHODS` | Comma-separated allowed CORS methods | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | No |
+| `CORS_ALLOWED_HEADERS` | Comma-separated allowed request headers | `Accept,Authorization,Content-Type,X-API-Key,X-Requested-With` | No |
+| `CORS_EXPOSED_HEADERS` | Comma-separated response headers exposed to browser JS | `X-Request-ID` | No |
+| `CORS_ALLOW_CREDENTIALS` | Include `Access-Control-Allow-Credentials` | `false` | No |
+| `CORS_MAX_AGE_SECONDS` | Browser preflight cache duration | `600` | No |
 
-*\*If either TLS file is missing, the server runs in insecure HTTP mode.*
+\* If either TLS file is missing, the app runs insecure HTTP mode.
 
-## Getting Started
+## Recommended CORS presets
 
-### Prerequisites
+### Local development
 
-- Go 1.26 or later.
-- (Recommended) Valid TLS certificate and private key.
-- (Production) Nginx or similar reverse proxy for TLS termination, rate limiting, and load balancing as needed.
+```env
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+CORS_ALLOWED_METHODS=GET,POST,PUT,PATCH,DELETE,OPTIONS
+CORS_ALLOWED_HEADERS=Accept,Authorization,Content-Type,X-API-Key,X-Requested-With
+CORS_EXPOSED_HEADERS=X-Request-ID
+CORS_ALLOW_CREDENTIALS=false
+CORS_MAX_AGE_SECONDS=300
+```
 
-### Installation & Run
+### Production (single trusted frontend)
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd rest_api
-   ```
+```env
+CORS_ALLOWED_ORIGINS=https://app.example.com
+CORS_ALLOWED_METHODS=GET,POST,PUT,PATCH,DELETE,OPTIONS
+CORS_ALLOWED_HEADERS=Accept,Authorization,Content-Type,X-API-Key,X-Requested-With
+CORS_EXPOSED_HEADERS=X-Request-ID
+CORS_ALLOW_CREDENTIALS=true
+CORS_MAX_AGE_SECONDS=600
+```
 
-2. **Configure Environment**:
-   Create a `.env` file in the root:
-   ```env
-   API_KEY=your-secret-key
-   DOMAIN=yourdomain.com
-   TLS_CERT_FILE=/path/to/cert.pem
-   TLS_KEY_FILE=/path/to/key.pem
-   ```
+## Quick verification
 
-3. **Run**:
-   ```bash
-   go run main.go
-   ```
+### Start app
 
-4. **Verify**:
-   - Health check: `curl http://localhost/health`
-   - Metrics: `curl http://localhost/metrics`
+```bash
+go run main.go
+```
 
-## Local Development (No TLS)
+### Verify endpoints
 
-To run locally without HTTPS:
+```bash
+curl -i http://localhost/health
+curl -i http://localhost/readyz
+curl -i http://localhost/livez
+curl -i http://localhost/metrics
+curl -i http://localhost/
+curl -i http://localhost/ui/dashboard
+```
 
-1. Ensure `TLS_CERT_FILE` and `TLS_KEY_FILE` are not set in your `.env`.
+Example healthy `/readyz` or `/health` response:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-04-13T20:10:33Z",
+  "uptime_sec": 42,
+  "checks": {
+    "templates_loaded": "ok",
+    "state_initialized": "ok",
+    "static_css_present": "ok"
+  }
+}
+```
+
+### Verify CORS preflight
+
+```bash
+curl -i -X OPTIONS "http://localhost/" \
+  -H "Origin: http://localhost:3000" \
+  -H "Access-Control-Request-Method: GET" \
+  -H "Access-Control-Request-Headers: Authorization,Content-Type"
+```
+
+Expected:
+
+- Allowed origin/method -> `204 No Content` + `Access-Control-Allow-*` headers.
+- Disallowed preflight origin -> `403 Forbidden`.
+
+## Local offline mode (no CDN dependency)
+
+By default, the shell template references HTMX from the public CDN. For air-gapped or offline environments, you can vendor HTMX locally.
+
+1. Download `htmx.min.js` and place it at `web/static/htmx.min.js`.
+2. Update `web/templates/shell.gohtml`:
+
+```html
+<!-- Replace CDN script with local asset -->
+<script src="/assets/htmx.min.js"></script>
+```
+
+3. Restart the app (`go run main.go`) so template changes are reloaded.
+
+Because `/assets/*` is already served from `web/static`, no additional route changes are needed.
+
+## Local development without TLS
+
+1. Unset `TLS_CERT_FILE` and `TLS_KEY_FILE`.
 2. Optionally set `HTTPS_PORT=:8080`.
-3. The server will log a warning and run over HTTP on the specified port.
+3. Run `go run main.go`.
+4. Access `http://localhost:8080/`.
+
+## Testing
+
+The project now includes unit tests across:
+
+- `main` bootstrap logic and health/readiness/liveness handler registration.
+- `pkg/server` config parsing, middleware behavior, route protection, and server lifecycle branches.
+- `pkg/ui` route handlers, template rendering, state mutation, and health checks.
+
+### Run tests
+
+```bash
+go test ./...
+```
+
+### Generate coverage report
+
+```bash
+go test ./... -coverprofile=coverage.out
+go tool cover -func=coverage.out
+```
+
+### Enforce 100% coverage
+
+Use this command in CI/local checks:
+
+```bash
+go test ./... -coverprofile=coverage.out && \
+  go tool cover -func=coverage.out | rg "^total:" | rg "100.0%"
+```
+
+If the final `rg` command does not match, coverage is below target and the command exits non-zero.
+
+### How to add more tests
+
+1. **Pick the behavior boundary first**  
+   Test outcomes at handler/middleware boundaries (`status`, headers, body, side effects), not implementation details.
+
+2. **Use `httptest` for HTTP behavior**  
+   Build requests with `httptest.NewRequest`, capture output with `httptest.NewRecorder`, assert response contract.
+
+3. **Use dependency injection seams where needed**  
+   The project exposes injectable function vars in `main` and `pkg/server` for hard-to-reach branches (startup errors, shutdown errors, fallback paths).
+
+4. **Cover both success and failure paths**  
+   For each new function, add at least one passing and one failing/degraded test case.
+
+5. **Keep tests deterministic**  
+   Use `t.TempDir()` and `t.Chdir()` when testing template/static file discovery, and avoid reliance on external services.
+
+6. **Update docs with behavior changes**  
+   When tests reveal or enforce new behavior, update this README and endpoint examples in the same change.
+
+## Notes for production hardening
+
+- Put Nginx/API gateway in front for TLS termination policy, rate limiting, and request filtering.
+- Keep CORS origin lists narrow and explicit.
+- Keep `TRUST_PROXY=false` unless requests always pass through trusted proxy hops.
+- Move in-memory SPA state to a persistent store when data durability is required.

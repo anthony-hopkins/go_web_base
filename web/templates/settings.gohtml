@@ -1,0 +1,16 @@
+{{ define "settings" }}
+<section>
+  <h2>Environment Settings</h2>
+  <div class="card-grid">
+    <article class="card">
+      <h3>Secure Defaults</h3>
+      <p>TLS 1.3, security headers, and explicit CORS allowlists are active.</p>
+    </article>
+    <article class="card">
+      <h3>Proxy Responsibility</h3>
+      <p>Nginx handles edge rate-limiting and traffic policy.</p>
+    </article>
+  </div>
+  <p class="muted">Rendered at {{ .Now }}</p>
+</section>
+{{ end }}
