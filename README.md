@@ -122,6 +122,9 @@ sequenceDiagram
 ```text
 go_web_template/
 ├── main.go
+├── tls/
+│   └── certs/             # Place TLS PEM files here (see Security model → TLS).
+│       └── .gitkeep       # Directory tracked in git; certificate files stay local/untracked.
 ├── web/
 │   ├── templates/
 │   │   ├── shell.gohtml
@@ -172,7 +175,7 @@ Practical result:
 
 - Load env configuration with defaults (`cmp.Or`) and validation.
 - Build `http.Server` with strict timeouts.
-- Load TLS certificates when provided; otherwise run HTTP mode with warning.
+- Load TLS certificates when provided (paths typically under `./tls/certs/`); otherwise run HTTP mode with warning.
 - Register `/metrics` and run graceful shutdown on `SIGINT/SIGTERM`.
 - Provide helper methods for protected routes (`HandleProtected*`) using `X-API-Key`.
 
@@ -210,6 +213,14 @@ This keeps interactivity high while preserving:
 
 - TLS 1.3 minimum is enforced when cert/key are provided.
 - If TLS cert variables are unset, app runs plain HTTP (intended for local/dev or behind trusted TLS-terminating proxy).
+- **Certificate location (convention):** store PEM files under **`./tls/certs/`** at the project root (relative to where you run the binary). Point `TLS_CERT_FILE` and `TLS_KEY_FILE` at those paths—for example:
+
+```env
+TLS_CERT_FILE=./tls/certs/your-domain.crt
+TLS_KEY_FILE=./tls/certs/your-domain.key
+```
+
+The `tls/certs/` directory is present in the repo (via `.gitkeep`) so the layout is consistent; do not commit real private keys—add them locally or inject them in deployment.
 
 ### Security headers
 
@@ -271,8 +282,8 @@ server {
 | `API_KEY` | Shared key for protected route helpers | - | Yes |
 | `DOMAIN` | Service domain identifier | - | Yes |
 | `HTTPS_PORT` | Bind address/port | `:443` | No |
-| `TLS_CERT_FILE` | Path to TLS certificate PEM | - | No* |
-| `TLS_KEY_FILE` | Path to TLS private key PEM | - | No* |
+| `TLS_CERT_FILE` | Path to TLS certificate PEM (convention: `./tls/certs/*.crt`) | - | No* |
+| `TLS_KEY_FILE` | Path to TLS private key PEM (convention: `./tls/certs/*.key`) | - | No* |
 | `TRUST_PROXY` | Trust `X-Forwarded-For` first hop for logged client IP | `false` | No |
 | `MAX_HEADER_BYTES` | Max allowed request header size | `1048576` | No |
 | `MAX_BODY_BYTES` | Max allowed request body size | `10485760` | No |
