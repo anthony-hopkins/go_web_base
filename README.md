@@ -29,34 +29,33 @@ The app is intentionally split into two runtime layers:
 
 ## Architecture diagram
 
+Diagrams follow [GitHub Mermaid](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams#creating-mermaid-diagrams): use a fenced code block with the `mermaid` tag as the language (same as GitHub Docs).
+
 ```mermaid
-flowchart TD
-    U[Browser / Client] -->|HTTP Request| M[Middleware Chain]
-    M --> R[Go ServeMux Routes]
+graph TD
+    N["Nginx or edge proxy"] --> U["Client request"]
+    U --> MW["Middleware stack"]
+    MW --> R["http.ServeMux"]
+    R --> UI["pkg/ui"]
+    R --> PS["pkg/server routes"]
+    UI --> T["web/templates"]
+    UI --> C["web/static"]
+    UI --> ST["In-memory UI state"]
+    PS --> CFG["Configuration"]
+    PS --> MET["Prometheus /metrics"]
+    PS --> TLS["TLS and graceful shutdown"]
+```
 
-    subgraph Middleware_Order[Middleware Order]
-      M1[recoveryMiddleware]
-      M2[requestIDMiddleware]
-      M3[securityHeadersMiddleware]
-      M4[corsMiddleware]
-      M5[loggingMiddleware]
-      M6[MaxBytesHandler]
-      M1 --> M2 --> M3 --> M4 --> M5 --> M6
-    end
+Request path through middleware (outer layer first, then inward toward the mux) matches `pkg/server/server.go`:
 
-    M --> Middleware_Order
-    R -->|UI routes| UI[pkg/ui]
-    R -->|platform routes| S[pkg/server]
-
-    UI --> T[web/templates/*.gohtml]
-    UI --> C[web/static/app.css]
-    UI --> ST[(in-memory UI state)]
-
-    S --> CFG[pkg/server/config.go]
-    S --> MET[/metrics endpoint]
-    S --> TLS[TLS + graceful shutdown]
-
-    N[Nginx / Edge Proxy] -->|TLS termination, rate limiting, forwarding| U
+```mermaid
+graph LR
+    MB["MaxBytesHandler"] --> LG["loggingMiddleware"]
+    LG --> CR["corsMiddleware"]
+    CR --> SH["securityHeadersMiddleware"]
+    SH --> RI["requestIDMiddleware"]
+    RI --> RC["recoveryMiddleware"]
+    RC --> MX["ServeMux"]
 ```
 
 ### End-to-end request sequence
@@ -72,30 +71,30 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant B as Browser
-    participant S as Go Server
-    participant U as pkg/ui
+    participant S as GoServer
+    participant U as PkgUI
     participant T as Templates
-    participant ST as In-memory State
+    participant ST as UIState
 
     B->>S: GET /
-    S->>U: handleShell()
-    U->>ST: snapshot()
-    U->>T: render "dashboard" fragment
-    U->>T: render "shell" with initial fragment
+    S->>U: handleShell
+    U->>ST: snapshot
+    U->>T: render dashboard fragment
+    U->>T: render shell with initial fragment
     U-->>B: Full HTML shell
 
     B->>S: hx-get /ui/tasks
-    S->>U: handleTasks()
-    U->>ST: snapshot()
-    U->>T: render "tasks" fragment
-    U-->>B: HTML fragment (swap into #spa-content)
+    S->>U: handleTasks
+    U->>ST: snapshot
+    U->>T: render tasks fragment
+    U-->>B: HTML fragment into spa-content target
 
-    B->>S: hx-post /ui/tasks (form data)
-    S->>U: handleCreateTask()
-    U->>ST: addTask()
-    U->>ST: snapshot()
-    U->>T: render updated "tasks" fragment
-    U-->>B: Updated fragment (in-place swap)
+    B->>S: hx-post /ui/tasks form data
+    S->>U: handleCreateTask
+    U->>ST: addTask
+    U->>ST: snapshot
+    U->>T: render updated tasks fragment
+    U-->>B: Updated fragment in-place swap
 ```
 
 ### What this means operationally
