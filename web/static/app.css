@@ -1,3 +1,12 @@
+/*
+ * Application stylesheet for the HTMX + html/template UI.
+ * Theme: dark “AWS console”-inspired palette (charcoal panels, orange primary actions).
+ * Loaded by shell.gohtml as /assets/app.css (served from web/static).
+ */
+
+/* ---------------------------------------------------------------------------
+   Design tokens: colors and dark color-scheme hint for form controls / scrollbars
+   --------------------------------------------------------------------------- */
 :root {
   color-scheme: dark;
   --aws-bg: #252f3e;
@@ -13,6 +22,9 @@
   box-sizing: border-box;
 }
 
+/* ---------------------------------------------------------------------------
+   Base typography and page background
+   --------------------------------------------------------------------------- */
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
@@ -20,6 +32,9 @@ body {
   color: var(--aws-text);
 }
 
+/* ---------------------------------------------------------------------------
+   Shell layout: centered column, vertical rhythm (matches shell.gohtml .layout)
+   --------------------------------------------------------------------------- */
 .layout {
   max-width: 980px;
   margin: 0 auto;
@@ -28,6 +43,9 @@ body {
   gap: 1rem;
 }
 
+/* ---------------------------------------------------------------------------
+   Header strip under the document title
+   --------------------------------------------------------------------------- */
 .app-header {
   background: var(--aws-panel);
   border: 1px solid var(--aws-border);
@@ -44,6 +62,9 @@ body {
   color: var(--aws-muted);
 }
 
+/* ---------------------------------------------------------------------------
+   HTMX navigation buttons (also reused for submit on task form)
+   --------------------------------------------------------------------------- */
 .nav-panel {
   display: flex;
   flex-wrap: wrap;
@@ -66,6 +87,9 @@ body {
   filter: brightness(1.06);
 }
 
+/* ---------------------------------------------------------------------------
+   Main content region: panel fragments swap inside #spa-content.content-panel
+   --------------------------------------------------------------------------- */
 .content-panel {
   background: var(--aws-panel);
   border: 1px solid var(--aws-border);
@@ -73,6 +97,21 @@ body {
   padding: 1rem 1.2rem;
 }
 
+.content-panel section > h2 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.content-panel label {
+  font-size: 0.875rem;
+  color: var(--aws-muted);
+}
+
+/* ---------------------------------------------------------------------------
+   Dashboard/settings: responsive card grid
+   --------------------------------------------------------------------------- */
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -90,6 +129,9 @@ body {
   margin-top: 0;
 }
 
+/* ---------------------------------------------------------------------------
+   Tasks: form and list
+   --------------------------------------------------------------------------- */
 .task-form {
   display: grid;
   gap: 0.5rem;
@@ -114,6 +156,9 @@ body {
   margin-bottom: 0.45rem;
 }
 
+/* ---------------------------------------------------------------------------
+   Utilities
+   --------------------------------------------------------------------------- */
 .muted {
   color: var(--aws-muted);
 }
@@ -123,6 +168,9 @@ body {
   font-weight: 700;
 }
 
+/* ---------------------------------------------------------------------------
+   Viewport: tighten padding on narrow screens
+   --------------------------------------------------------------------------- */
 @media (max-width: 720px) {
   .layout {
     padding: 0.9rem;

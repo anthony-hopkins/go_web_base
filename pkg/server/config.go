@@ -130,6 +130,8 @@ func LoadConfig() (Config, error) {
 	}, nil
 }
 
+// parseCSV splits a comma-separated environment value into trimmed non-empty tokens.
+// Empty input yields nil (not an empty slice), which LoadConfig uses to mean "unset".
 func parseCSV(value string) []string {
 	if strings.TrimSpace(value) == "" {
 		return nil

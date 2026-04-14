@@ -15,6 +15,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// The following variables are indirections for signal handling and ListenAndServe so
+// server_test can inject fake listeners, immediate signals, and shutdown errors without
+// binding real ports or waiting on the network.
 var signalNotify = signal.Notify
 var listenAndServe = func(s *http.Server) error { return s.ListenAndServe() }
 var listenAndServeTLS = func(s *http.Server) error { return s.ListenAndServeTLS("", "") }

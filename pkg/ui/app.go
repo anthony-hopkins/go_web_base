@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// appTitle is shown in the shell header and HTML document title.
 const appTitle = "DHS Labs Control Center"
 
 // App contains all SPA concerns and exposes a single registration entrypoint
@@ -43,7 +44,9 @@ func New() (*App, error) {
 
 // RegisterRoutes wires all SPA routes and static asset serving onto the shared
 // server mux. This keeps main.go focused on bootstrap and lifecycle concerns.
+// Static files are served from ./web/static under the URL prefix /assets/.
 func (a *App) RegisterRoutes(srv routeRegistrar) {
+	// Browsers request /assets/app.css etc.; StripPrefix maps URL path to filesystem path under web/static.
 	srv.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("web/static"))))
 	srv.HandleFunc("GET /", a.handleShell)
 	srv.HandleFunc("GET /ui/dashboard", a.handleDashboard)

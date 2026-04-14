@@ -1,4 +1,5 @@
 {{ define "shell" }}
+{{/* shell: full-page layout. .Content is inner HTML from a panel template. Nav uses hx-* to swap #spa-content; hx-push-url updates the address bar. */}}
 <!doctype html>
 <html lang="en">
 <head>
@@ -10,15 +11,18 @@
 </head>
 <body>
   <div class="layout">
+    {{/* Site chrome: title and timestamp from shellViewModel */}}
     <header class="app-header">
       <h1>{{ .Title }}</h1>
       <p>Rendered at {{ .Now }} | HTMX + html/template</p>
     </header>
+    {{/* Primary nav: HTMX GETs return fragments when HX-Request is set server-side */}}
     <nav class="nav-panel" aria-label="Primary navigation">
       <button class="nav-btn" hx-get="/ui/dashboard" hx-target="#spa-content" hx-swap="innerHTML" hx-push-url="true">Dashboard</button>
       <button class="nav-btn" hx-get="/ui/tasks" hx-target="#spa-content" hx-swap="innerHTML" hx-push-url="true">Tasks</button>
       <button class="nav-btn" hx-get="/ui/settings" hx-target="#spa-content" hx-swap="innerHTML" hx-push-url="true">Settings</button>
     </nav>
+    {{/* Swap target for all HTMX navigation and task form posts */}}
     <main id="spa-content" class="content-panel" aria-live="polite">{{ .Content }}</main>
   </div>
 </body>

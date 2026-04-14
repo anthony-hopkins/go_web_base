@@ -1,3 +1,5 @@
+// Tests for Server route registration, TLS load failures, Start/shutdown lifecycle with
+// injected listeners and signals, and PEM generation helpers for the TLS code path.
 package server
 
 import (
@@ -17,6 +19,7 @@ import (
 	"time"
 )
 
+// TestServerRouteRegistrationAndProtection exercises the raw mux: public, protected, and direct routes.
 func TestServerRouteRegistrationAndProtection(t *testing.T) {
 	t.Parallel()
 	cfg := Config{
@@ -82,6 +85,7 @@ func TestServerRouteRegistrationAndProtection(t *testing.T) {
 	}
 }
 
+// TestServerStartTLSLoadError expects Start to fail when cert paths do not exist.
 func TestServerStartTLSLoadError(t *testing.T) {
 	t.Parallel()
 	s := New(Config{
@@ -101,6 +105,7 @@ func TestServerStartTLSLoadError(t *testing.T) {
 	}
 }
 
+// TestServerStartAndShutdownBySignal fakes signal delivery and HTTP listener for graceful exit.
 func TestServerStartAndShutdownBySignal(t *testing.T) {
 	oldNotify := signalNotify
 	oldListen, oldShutdown := listenAndServe, shutdownServer
@@ -145,6 +150,7 @@ func TestServerStartAndShutdownBySignal(t *testing.T) {
 	}
 }
 
+// TestServerStartErrorFromListener surfaces listener failures that occur before shutdown.
 func TestServerStartErrorFromListener(t *testing.T) {
 	oldNotify := signalNotify
 	oldListen := listenAndServe
@@ -169,6 +175,7 @@ func TestServerStartErrorFromListener(t *testing.T) {
 	}
 }
 
+// TestServerShutdownError propagates errors from http.Server.Shutdown.
 func TestServerShutdownError(t *testing.T) {
 	oldNotify := signalNotify
 	oldListen := listenAndServe
@@ -198,6 +205,7 @@ func TestServerShutdownError(t *testing.T) {
 	}
 }
 
+// TestServerStartWithTLSBranch covers ListenAndServeTLS with real PEM files on disk.
 func TestServerStartWithTLSBranch(t *testing.T) {
 	oldNotify := signalNotify
 	oldListenTLS := listenAndServeTLS
@@ -226,6 +234,7 @@ func TestServerStartWithTLSBranch(t *testing.T) {
 	}
 }
 
+// writeSelfSignedCert creates a temporary RSA cert/key pair for TLS integration tests.
 func writeSelfSignedCert(t *testing.T) (string, string) {
 	t.Helper()
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)

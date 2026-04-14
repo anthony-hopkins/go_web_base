@@ -1,3 +1,5 @@
+// Tests for each middleware in isolation: request IDs, recovery, security headers, CORS
+// branches, client IP extraction, logging wrapper, and API key gating.
 package server
 
 import (
@@ -10,6 +12,7 @@ import (
 	"testing"
 )
 
+// TestRequestIDMiddlewareAndGetLogger checks X-Request-ID format and contextual logger attachment.
 func TestRequestIDMiddlewareAndGetLogger(t *testing.T) {
 	t.Parallel()
 
@@ -32,6 +35,7 @@ func TestRequestIDMiddlewareAndGetLogger(t *testing.T) {
 	}
 }
 
+// TestRequestIDMiddlewareFallbackEntropy forces crypto/rand failure to use timestamp fallback.
 func TestRequestIDMiddlewareFallbackEntropy(t *testing.T) {
 	t.Parallel()
 	old := randRead
@@ -46,6 +50,7 @@ func TestRequestIDMiddlewareFallbackEntropy(t *testing.T) {
 	}
 }
 
+// TestGetLoggerFallback ensures requests without middleware still get slog.Default().
 func TestGetLoggerFallback(t *testing.T) {
 	t.Parallel()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -54,6 +59,7 @@ func TestGetLoggerFallback(t *testing.T) {
 	}
 }
 
+// TestRecoveryMiddleware asserts panics become 500 and increment panics_total.
 func TestRecoveryMiddleware(t *testing.T) {
 	t.Parallel()
 	h := recoveryMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +72,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 	}
 }
 
+// TestSecurityHeadersMiddleware verifies expected security headers are always present.
 func TestSecurityHeadersMiddleware(t *testing.T) {
 	t.Parallel()
 	h := securityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -84,6 +91,7 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 	}
 }
 
+// TestCORSMiddlewareAllowedPreflightAndRequest covers happy-path GET and OPTIONS preflight.
 func TestCORSMiddlewareAllowedPreflightAndRequest(t *testing.T) {
 	t.Parallel()
 	cfg := Config{
@@ -122,6 +130,7 @@ func TestCORSMiddlewareAllowedPreflightAndRequest(t *testing.T) {
 	}
 }
 
+// TestCORSMiddlewareFailureCases exercises forbidden origin, passthrough OPTIONS, and 405 method.
 func TestCORSMiddlewareFailureCases(t *testing.T) {
 	t.Parallel()
 	cfg := Config{
@@ -162,6 +171,7 @@ func TestCORSMiddlewareFailureCases(t *testing.T) {
 	}
 }
 
+// TestAllowedCORSOriginAndPreflightHelpers unit-tests allowedCORSOrigin and isCORSPreflight.
 func TestAllowedCORSOriginAndPreflightHelpers(t *testing.T) {
 	t.Parallel()
 	if _, ok := allowedCORSOrigin("x", nil); ok {
@@ -188,6 +198,7 @@ func TestAllowedCORSOriginAndPreflightHelpers(t *testing.T) {
 	}
 }
 
+// TestClientIP validates RemoteAddr parsing and X-Forwarded-For when trustProxy is true.
 func TestClientIP(t *testing.T) {
 	t.Parallel()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -207,6 +218,7 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+// TestResponseWriterAndLoggingMiddleware ensures status capture and handler invocation.
 func TestResponseWriterAndLoggingMiddleware(t *testing.T) {
 	t.Parallel()
 	var wrote bool
@@ -225,6 +237,7 @@ func TestResponseWriterAndLoggingMiddleware(t *testing.T) {
 	}
 }
 
+// TestAPIKeyAuthMiddleware checks missing, correct, and wrong X-API-Key values.
 func TestAPIKeyAuthMiddleware(t *testing.T) {
 	t.Parallel()
 	h := apiKeyAuthMiddleware("secret", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -255,6 +268,7 @@ func TestAPIKeyAuthMiddleware(t *testing.T) {
 	}
 }
 
+// TestCORSNoOriginPassThrough ensures non-browser clients without Origin skip CORS logic.
 func TestCORSNoOriginPassThrough(t *testing.T) {
 	t.Parallel()
 	called := false
@@ -270,6 +284,7 @@ func TestCORSNoOriginPassThrough(t *testing.T) {
 	}
 }
 
+// TestCORSPreflightWithoutOptionalLists covers preflight when methods/headers lists are empty.
 func TestCORSPreflightWithoutOptionalLists(t *testing.T) {
 	t.Parallel()
 	cfg := Config{
@@ -299,6 +314,7 @@ func TestCORSPreflightWithoutOptionalLists(t *testing.T) {
 	}
 }
 
+// TestCORSDisallowedNonPreflightPassesThrough: wrong Origin on GET does not 403 (non-preflight).
 func TestCORSDisallowedNonPreflightPassesThrough(t *testing.T) {
 	t.Parallel()
 	called := false

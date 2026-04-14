@@ -33,6 +33,12 @@
 #   rules         Multiline string, usually markdown bullet list
 #
 # TIP: Keep ai_behavior.rules concise and actionable; long essays dilute focus.
+#
+# ENFORCEMENT
+# -----------
+# Rules under ai_behavior (especially readme-and-comments and docs-override) are binding
+# for this repository. Agents must apply them on every task, not only when the user
+# repeats them in chat.
 # =============================================================================
 
 rules:
@@ -242,9 +248,14 @@ rules:
     ai_behavior:
       priority: high
       rules: |
-        - Always update README.md when generating or modifying code.
-        - README.md must fully explain functionality, setup, and architecture.
-        - Comment all files thoroughly and consistently.
+        - Always update README.md when generating or modifying code that changes behavior, setup, public API, or architecture (keep edits proportional to the change).
+        - README.md must fully explain functionality, setup, and architecture for this template.
+        - COMMENTING IS MANDATORY for every substantive code change (not optional):
+          - Go: One package doc per package (typically doc.go). Every exported identifier must have a doc comment. Document non-obvious control flow, invariants, and security-sensitive behavior. Test files (_test.go): package comment describing scope; each Test* function states what it verifies and any injected fakes.
+          - Go templates (*.gohtml): HTML comments before each logical block (shell chrome, nav, main region, panel sections) noting HTMX attributes and swap targets where non-obvious.
+          - CSS: Section headers grouping design tokens, layout, navigation, content panels, cards, forms, utilities, and media queries.
+          - Environment samples (.env): Group with # headers (required / optional / CORS) and short per-variable notes; never commit production secrets.
+        - Prefer comments that explain intent, contracts, and failure modes—not repetition of symbol names.
 
   - id: ai-behavior-docs-override-user-defaults
     description: Project docs/README rules override generic “minimal markdown” preferences

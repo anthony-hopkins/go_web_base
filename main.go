@@ -1,3 +1,7 @@
+// Command entrypoint for the secure Go web template. It configures JSON structured logging,
+// loads server and UI modules, registers liveness/readiness-style JSON endpoints and the
+// HTML UI, then blocks in the HTTP server until shutdown. Injectable function variables
+// (loadConfigFunc, newServerFunc, newUIFunc, exitFunc) exist primarily for tests.
 package main
 
 import (
@@ -11,6 +15,8 @@ import (
 	"github.com/anthony-hopkins/rest_api_template/pkg/ui"
 )
 
+// appServer is the minimal surface main needs from the HTTP server: route registration
+// and blocking Start. Tests substitute a fake implementation to avoid listening on ports.
 type appServer interface {
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
 	Handle(pattern string, handler http.Handler)
@@ -38,6 +44,8 @@ func main() {
 	}
 }
 
+// run performs all startup work except exiting the process. On success it only returns
+// after the HTTP server shuts down gracefully (or fails to start).
 func run() error {
 	// Initialize structured logging.
 	// We use slog.NewJSONHandler to output logs in a format that's easily

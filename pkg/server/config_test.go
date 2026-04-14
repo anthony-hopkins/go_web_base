@@ -1,3 +1,4 @@
+// Tests for LoadConfig and parseCSV: default expansion, validation errors, and CORS edge cases.
 package server
 
 import (
@@ -6,6 +7,7 @@ import (
 	"testing"
 )
 
+// TestParseCSV verifies trimming, empty segments, and nil vs empty for unset env.
 func TestParseCSV(t *testing.T) {
 	t.Parallel()
 
@@ -25,6 +27,7 @@ func TestParseCSV(t *testing.T) {
 	}
 }
 
+// TestLoadConfigSuccessAndDefaults checks required vars and representative defaults.
 func TestLoadConfigSuccessAndDefaults(t *testing.T) {
 	t.Setenv("API_KEY", "test-key")
 	t.Setenv("DOMAIN", "example.com")
@@ -61,6 +64,7 @@ func TestLoadConfigSuccessAndDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadConfigValidationErrors table-tests validation failures and CORS credential rules.
 func TestLoadConfigValidationErrors(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -157,6 +161,7 @@ func TestLoadConfigValidationErrors(t *testing.T) {
 	}
 }
 
+// clearConfigEnv resets known config-related env keys so parallel tests do not leak state.
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	keys := []string{

@@ -1,3 +1,6 @@
+// Tests for template loading, health aggregation, HTMX vs full-page routing, state
+// mutation, and error branches in shell rendering. Many tests chdir to the module root
+// so web/templates and web/static resolve as in production.
 package ui
 
 import (
@@ -13,6 +16,7 @@ import (
 	"time"
 )
 
+// TestNewAndHealth ensures New succeeds from the repo root and Health reports ok.
 func TestNewAndHealth(t *testing.T) {
 	t.Chdir(projectRoot(t))
 	app, err := New()
@@ -29,6 +33,7 @@ func TestNewAndHealth(t *testing.T) {
 	}
 }
 
+// TestHealthDegradedWhenCSSMissing simulates a deployment without web/static on disk.
 func TestHealthDegradedWhenCSSMissing(t *testing.T) {
 	t.Chdir(t.TempDir())
 	app := &App{
@@ -46,6 +51,7 @@ func TestHealthDegradedWhenCSSMissing(t *testing.T) {
 	}
 }
 
+// TestHealthDegradedForMissingTemplateAndState uses incomplete templates and empty state.
 func TestHealthDegradedForMissingTemplateAndState(t *testing.T) {
 	t.Chdir(t.TempDir())
 	tmpl := template.New("shell")
@@ -61,6 +67,7 @@ func TestHealthDegradedForMissingTemplateAndState(t *testing.T) {
 	}
 }
 
+// TestTemplateHelpers covers renderPanelTemplate and renderPanel success/failure paths.
 func TestTemplateHelpers(t *testing.T) {
 	t.Chdir(projectRoot(t))
 	app, err := New()
@@ -94,6 +101,7 @@ func TestTemplateHelpers(t *testing.T) {
 	}
 }
 
+// TestRouteHandlers exercises each HTTP handler for full-page vs HTMX behavior.
 func TestRouteHandlers(t *testing.T) {
 	t.Chdir(projectRoot(t))
 	app, err := New()
@@ -108,36 +116,63 @@ func TestRouteHandlers(t *testing.T) {
 		t.Fatalf("unexpected shell response: code=%d body=%q", rec.Code, rec.Body.String())
 	}
 
-	// Dashboard route.
+	// Dashboard route — direct GET serves full shell + CSS.
 	rec = httptest.NewRecorder()
 	app.handleDashboard(rec, httptest.NewRequest(http.MethodGet, "/ui/dashboard", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Service Dashboard") {
-		t.Fatalf("unexpected dashboard response: code=%d body=%q", rec.Code, rec.Body.String())
+	dashBody := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(dashBody, "Service Dashboard") || !strings.Contains(dashBody, "app.css") {
+		t.Fatalf("unexpected dashboard response: code=%d body=%q", rec.Code, dashBody)
 	}
 
-	// Tasks GET route.
+	// Dashboard HTMX — fragment only (no document shell).
+	rec = httptest.NewRecorder()
+	hxDash := httptest.NewRequest(http.MethodGet, "/ui/dashboard", nil)
+	hxDash.Header.Set("HX-Request", "true")
+	app.handleDashboard(rec, hxDash)
+	dashFrag := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(dashFrag, "Service Dashboard") || strings.Contains(strings.ToLower(dashFrag), "<!doctype") {
+		t.Fatalf("unexpected HTMX dashboard response: code=%d body=%q", rec.Code, dashFrag)
+	}
+
+	// Tasks GET route — full page.
 	rec = httptest.NewRecorder()
 	app.handleTasks(rec, httptest.NewRequest(http.MethodGet, "/ui/tasks", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Operations Tasks") {
-		t.Fatalf("unexpected tasks response: code=%d body=%q", rec.Code, rec.Body.String())
+	tasksBody := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(tasksBody, "Operations Tasks") || !strings.Contains(tasksBody, "app.css") {
+		t.Fatalf("unexpected tasks response: code=%d body=%q", rec.Code, tasksBody)
 	}
 
-	// Tasks POST route with value.
+	// Tasks POST route with value — full page when not HTMX.
 	form := url.Values{}
 	form.Set("task", "  new task  ")
 	req := httptest.NewRequest(http.MethodPost, "/ui/tasks", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec = httptest.NewRecorder()
 	app.handleCreateTask(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "new task") {
-		t.Fatalf("unexpected task create response: code=%d body=%q", rec.Code, rec.Body.String())
+	postBody := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(postBody, "new task") || !strings.Contains(postBody, "app.css") {
+		t.Fatalf("unexpected task create response: code=%d body=%q", rec.Code, postBody)
 	}
 
-	// Settings route.
+	// Tasks POST with HTMX — fragment only.
+	form = url.Values{}
+	form.Set("task", "  htmx task  ")
+	req = httptest.NewRequest(http.MethodPost, "/ui/tasks", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	rec = httptest.NewRecorder()
+	app.handleCreateTask(rec, req)
+	htmxPost := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(htmxPost, "htmx task") || strings.Contains(strings.ToLower(htmxPost), "<!doctype") {
+		t.Fatalf("unexpected HTMX task create response: code=%d body=%q", rec.Code, htmxPost)
+	}
+
+	// Settings route — full page.
 	rec = httptest.NewRecorder()
 	app.handleSettings(rec, httptest.NewRequest(http.MethodGet, "/ui/settings", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Environment Settings") {
-		t.Fatalf("unexpected settings response: code=%d body=%q", rec.Code, rec.Body.String())
+	setBody := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(setBody, "Environment Settings") || !strings.Contains(setBody, "app.css") {
+		t.Fatalf("unexpected settings response: code=%d body=%q", rec.Code, setBody)
 	}
 
 	// Empty task input should still return tasks fragment.
@@ -152,6 +187,7 @@ func TestRouteHandlers(t *testing.T) {
 	}
 }
 
+// TestHandleShellErrorBranches verifies 500 when dashboard or shell template is missing.
 func TestHandleShellErrorBranches(t *testing.T) {
 	t.Parallel()
 	// Missing dashboard should fail initial fragment render.
@@ -182,6 +218,7 @@ func TestHandleShellErrorBranches(t *testing.T) {
 	}
 }
 
+// TestRegisterRoutes checks static asset wiring through a live ServeMux.
 func TestRegisterRoutes(t *testing.T) {
 	t.Chdir(projectRoot(t))
 	app, err := New()
@@ -200,6 +237,7 @@ func TestRegisterRoutes(t *testing.T) {
 	}
 }
 
+// TestStateSnapshotAndMutation validates addTask ordering and snapshot copy behavior.
 func TestStateSnapshotAndMutation(t *testing.T) {
 	t.Parallel()
 	s := &state{
@@ -215,6 +253,7 @@ func TestStateSnapshotAndMutation(t *testing.T) {
 	}
 }
 
+// TestHealthJSONMarshaling is a smoke test for HealthResponse JSON field names.
 func TestHealthJSONMarshaling(t *testing.T) {
 	t.Parallel()
 	h := HealthResponse{
@@ -229,6 +268,7 @@ func TestHealthJSONMarshaling(t *testing.T) {
 	}
 }
 
+// TestLoadTemplatesFailure expects ParseGlob to fail when no template files exist.
 func TestLoadTemplatesFailure(t *testing.T) {
 	t.Chdir(t.TempDir())
 	_, err := loadTemplates()
@@ -237,6 +277,7 @@ func TestLoadTemplatesFailure(t *testing.T) {
 	}
 }
 
+// TestNewFailure ensures New returns an error when templates cannot be loaded.
 func TestNewFailure(t *testing.T) {
 	t.Chdir(t.TempDir())
 	_, err := New()
@@ -245,6 +286,7 @@ func TestNewFailure(t *testing.T) {
 	}
 }
 
+// TestHandleCreateTaskParseError returns 400 when the form body is not parseable.
 func TestHandleCreateTaskParseError(t *testing.T) {
 	t.Chdir(projectRoot(t))
 	app, err := New()
@@ -271,6 +313,7 @@ func projectRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
+// templateMust builds a minimal valid template set for health/degraded tests in isolation.
 func templateMust(t *testing.T) *template.Template {
 	t.Helper()
 	tmpl := template.New("shell")

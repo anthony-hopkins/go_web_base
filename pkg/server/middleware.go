@@ -173,6 +173,9 @@ func corsMiddleware(next http.Handler, cfg Config) http.Handler {
 	})
 }
 
+// allowedCORSOrigin returns the Access-Control-Allow-Origin value to echo and whether
+// the request origin is permitted. Wildcard "*" is allowed only when credentials are off
+// (enforced separately in LoadConfig).
 func allowedCORSOrigin(origin string, allowedOrigins []string) (string, bool) {
 	if len(allowedOrigins) == 0 {
 		return "", false
@@ -186,6 +189,7 @@ func allowedCORSOrigin(origin string, allowedOrigins []string) (string, bool) {
 	return "", false
 }
 
+// isCORSPreflight identifies CORS preflight: OPTIONS with Access-Control-Request-Method.
 func isCORSPreflight(r *http.Request) bool {
 	return r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
 }

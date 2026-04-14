@@ -1,3 +1,7 @@
+// Tests for main package bootstrap: dependency injection of config/server/UI factories,
+// health handler wiring, degraded paths when the working directory lacks templates, and
+// process exit codes. fakeServer records registered routes; failingWriter forces write
+// errors for handler error branches.
 package main
 
 import (
@@ -12,6 +16,8 @@ import (
 	"github.com/anthony-hopkins/rest_api_template/pkg/ui"
 )
 
+// fakeServer implements appServer for tests: it stores Handle/HandleFunc registrations
+// without listening, and Start returns startErr when set (e.g. to simulate startup failure).
 type fakeServer struct {
 	startErr error
 	handles  map[string]http.Handler
@@ -34,6 +40,8 @@ func (f *fakeServer) HandleFunc(pattern string, handler func(http.ResponseWriter
 
 func (f *fakeServer) Start() error { return f.startErr }
 
+// failingWriter implements http.ResponseWriter with Write always failing, used to
+// exercise error logging paths in small JSON handlers without panicking.
 type failingWriter struct {
 	header http.Header
 }
@@ -47,6 +55,8 @@ func (w *failingWriter) Header() http.Header {
 func (w *failingWriter) Write([]byte) (int, error)  { return 0, errors.New("write failed") }
 func (w *failingWriter) WriteHeader(statusCode int) {}
 
+// TestRunSuccess asserts run() registers health/livez/readyz, exercises their handlers
+// including json encode failure paths, and observes 503 when the UI is unhealthy (wrong cwd).
 func TestRunSuccess(t *testing.T) {
 	t.Chdir(projectRootMain(t))
 
@@ -106,6 +116,7 @@ func TestRunSuccess(t *testing.T) {
 	fs.funcs["GET /readyz"](&failingWriter{}, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 }
 
+// TestRunConfigError ensures configuration failures surface from run() without starting the server.
 func TestRunConfigError(t *testing.T) {
 	old := loadConfigFunc
 	t.Cleanup(func() { loadConfigFunc = old })
@@ -115,6 +126,7 @@ func TestRunConfigError(t *testing.T) {
 	}
 }
 
+// TestRunUIInitError covers failure to construct the UI app (e.g. missing templates).
 func TestRunUIInitError(t *testing.T) {
 	oldLoad, oldUI := loadConfigFunc, newUIFunc
 	t.Cleanup(func() { loadConfigFunc, newUIFunc = oldLoad, oldUI })
@@ -127,6 +139,7 @@ func TestRunUIInitError(t *testing.T) {
 	}
 }
 
+// TestRunServerStartError propagates errors when the server fails immediately at Start().
 func TestRunServerStartError(t *testing.T) {
 	oldLoad, oldServer, oldUI := loadConfigFunc, newServerFunc, newUIFunc
 	t.Cleanup(func() { loadConfigFunc, newServerFunc, newUIFunc = oldLoad, oldServer, oldUI })
@@ -142,6 +155,7 @@ func TestRunServerStartError(t *testing.T) {
 	}
 }
 
+// TestMainSuccess invokes main() with stubbed dependencies that do not exit the process.
 func TestMainSuccess(t *testing.T) {
 	t.Chdir(projectRootMain(t))
 	oldLoad, oldServer, oldUI := loadConfigFunc, newServerFunc, newUIFunc
@@ -153,6 +167,7 @@ func TestMainSuccess(t *testing.T) {
 	main()
 }
 
+// TestMainErrorPathExits verifies main exits with code 1 when run fails at startup.
 func TestMainErrorPathExits(t *testing.T) {
 	oldLoad, oldExit := loadConfigFunc, exitFunc
 	t.Cleanup(func() { loadConfigFunc, exitFunc = oldLoad, oldExit })
@@ -166,6 +181,7 @@ func TestMainErrorPathExits(t *testing.T) {
 	}
 }
 
+// projectRootMain returns the directory containing main.go so tests can chdir to the module root.
 func projectRootMain(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)

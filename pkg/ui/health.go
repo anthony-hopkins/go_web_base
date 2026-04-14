@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// HealthResponse is returned by /health and includes concrete checks to support
-// readiness-style probing beyond a static 200 response.
+// HealthResponse is the JSON body for /health and /readyz when those endpoints return
+// detailed diagnostics. Status is "ok" only when every check passes; otherwise "degraded".
 type HealthResponse struct {
 	Status    string            `json:"status"`
 	Timestamp string            `json:"timestamp"`
@@ -16,7 +16,8 @@ type HealthResponse struct {
 	Checks    map[string]string `json:"checks"`
 }
 
-// Health evaluates core UI/runtime requirements and returns a structured report.
+// Health evaluates template availability, in-memory state, and static CSS on disk.
+// Orchestrators can use the aggregated status for readiness; /livez remains a trivial OK.
 func (a *App) Health() HealthResponse {
 	checks := map[string]string{
 		"templates_loaded":   "ok",
@@ -39,6 +40,7 @@ func (a *App) Health() HealthResponse {
 		checks["static_css_present"] = fmt.Sprintf("failed: %v", err)
 	}
 
+	// Any check value beginning with "failed" downgrades the whole report so probes fail loudly.
 	status := "ok"
 	for _, v := range checks {
 		if strings.HasPrefix(v, "failed") {

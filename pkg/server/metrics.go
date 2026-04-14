@@ -5,8 +5,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// This package initializes and exposes Prometheus metrics to monitor the health,
-// performance, and security of the REST API.
+// Prometheus metric variables are registered at init time via promauto so the /metrics
+// handler exposed in Server.Start can scrape them without extra wiring.
 
 var (
 	// httpRequestsTotal is a Prometheus counter that tracks the total number of HTTP requests processed.

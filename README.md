@@ -100,8 +100,8 @@ sequenceDiagram
 ### What this means operationally
 
 - Initial page load (`GET /`) renders both shell chrome and first content server-side.
-- HTMX navigation (`hx-get`) fetches only panel fragments, reducing payload size.
-- HTMX form posts (`hx-post`) mutate server state and immediately return updated HTML.
+- Opening or refreshing a deep link such as `GET /ui/tasks` without HTMX returns the **full shell** (nav + CSS) with the tasks panel, so bookmarks and direct URLs stay styled.
+- HTMX navigation (`hx-get`) and form posts (`hx-post`) send `HX-Request: true`, mutate server state as needed, and receive **panel fragments** that swap into `#spa-content` with smaller payloads than a full document.
 - No frontend build pipeline or framework runtime is required for interactive flows.
 
 ### HTMX troubleshooting quick reference
@@ -182,23 +182,21 @@ Practical result:
 
 - Parse templates from `web/templates/*.gohtml` at startup (fail-fast).
 - Register UI routes:
-  - `GET /` -> full shell HTML
-  - `GET /ui/dashboard` -> fragment
-  - `GET /ui/tasks` -> fragment
-  - `POST /ui/tasks` -> task mutation + refreshed fragment
-  - `GET /ui/settings` -> fragment
+  - `GET /` -> full shell HTML (dashboard panel)
+  - `GET /ui/dashboard`, `GET /ui/tasks`, `GET /ui/settings` -> full shell HTML when the request is not from HTMX (normal navigation, refresh, `curl`); **fragment only** when the `HX-Request: true` header is present (HTMX in-page swaps)
+  - `POST /ui/tasks` -> task mutation + tasks panel as full shell or fragment, using the same HTMX rule
   - `GET /assets/*` -> static assets from `web/static`
 - Maintain a thread-safe in-memory state (`sync.RWMutex`) for SPA data.
-- Render fragments and full page using Go templates only.
+- Render panel fragments and the full shell document using Go templates only.
 
 ## Frontend approach (without a JS framework)
 
 The UI is "SPA-style" rather than a client-rendered SPA:
 
-- The shell page (`/`) loads once.
-- HTMX requests server-rendered fragments for panel navigation.
+- The shell page (`/`) loads once; direct visits to `/ui/...` still get a full styled document, not a bare fragment.
+- HTMX requests (`HX-Request: true`) receive server-rendered fragments for panel navigation and form responses.
 - HTML swaps happen in-page (`hx-target="#spa-content"`).
-- Form submissions (`POST /ui/tasks`) return updated HTML fragments.
+- Form submissions (`POST /ui/tasks`) return updated HTML (fragment for HTMX, full shell otherwise).
 
 This keeps interactivity high while preserving:
 
