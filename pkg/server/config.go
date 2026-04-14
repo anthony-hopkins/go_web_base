@@ -14,7 +14,8 @@ import (
 )
 
 // Config holds the application configuration loaded from environment variables.
-// It centralizes all settings needed for server operation, security, and traffic control.
+// It centralizes all settings needed for server operation and security.
+// Request rate limiting is expected to be enforced by the reverse proxy (e.g. Nginx), not in-process.
 // Struct tags can be used for automated configuration binding or documentation.
 type Config struct {
 	APIKey              string        // APIKey is a mandatory security setting used for internal or secure requests.
@@ -22,14 +23,10 @@ type Config struct {
 	HTTPSPort           string        // HTTPSPort is the network address (e.g., ":443") where the server listens for secure HTTPS traffic.
 	TLSCertFile         string        // TLSCertFile is the file path to the manually-provided X.509 certificate file.
 	TLSKeyFile          string        // TLSKeyFile is the file path to the private key matching the manually-provided certificate.
-	TrustProxy          bool          // TrustProxy indicates whether to trust the 'X-Forwarded-For' header for client IP extraction.
-	MaxHeaderBytes      int           // MaxHeaderBytes specifies the maximum size in bytes that the server will accept in HTTP headers.
-	MaxBodyBytes        int64         // MaxBodyBytes restricts the maximum allowed size of the HTTP request body to prevent memory issues.
-	ShutdownTimeout     time.Duration // ShutdownTimeout is the maximum time to allow for active requests to finish during a graceful shutdown.
-	RateLimit           float64       // RateLimit defines the average number of requests per second allowed for a single client IP.
-	RateBurst           int           // RateBurst defines the maximum number of requests a single client IP can make in a single burst.
-	RateCleanupInterval time.Duration // RateCleanupInterval is the frequency at which old rate limiters are cleared from memory.
-	RateExpiration      time.Duration // RateExpiration is the duration after which an unused rate limiter is considered stale.
+	TrustProxy      bool          // TrustProxy, when true, uses X-Forwarded-For (first hop) for the client IP in structured logs (use behind Nginx/reverse proxies).
+	MaxHeaderBytes  int           // MaxHeaderBytes specifies the maximum size in bytes that the server will accept in HTTP headers.
+	MaxBodyBytes    int64         // MaxBodyBytes restricts the maximum allowed size of the HTTP request body to prevent memory issues.
+	ShutdownTimeout time.Duration // ShutdownTimeout is the maximum time to allow for active requests to finish during a graceful shutdown.
 }
 
 // LoadConfig attempts to read configuration from environment variables.
@@ -86,45 +83,16 @@ func LoadConfig() (Config, error) {
 		return Config{}, fmt.Errorf("invalid SHUTDOWN_TIMEOUT: %w", err)
 	}
 
-	// Rate limiting parameters for security and quality of service (QoS).
-	// RATE_LIMIT: Requests per second. Default: 10.
-	rateLimit, err := strconv.ParseFloat(cmp.Or(os.Getenv("RATE_LIMIT"), "10"), 64)
-	if err != nil {
-		return Config{}, fmt.Errorf("invalid RATE_LIMIT: %w", err)
-	}
-
-	// RATE_BURST: Max burst capacity. Default: 20.
-	rateBurst, err := strconv.Atoi(cmp.Or(os.Getenv("RATE_BURST"), "20"))
-	if err != nil {
-		return Config{}, fmt.Errorf("invalid RATE_BURST: %w", err)
-	}
-
-	// RATE_CLEANUP_INTERVAL: How often to sweep the limiter map. Default: 10 minutes.
-	rateCleanupInterval, err := time.ParseDuration(cmp.Or(os.Getenv("RATE_CLEANUP_INTERVAL"), "10m"))
-	if err != nil {
-		return Config{}, fmt.Errorf("invalid RATE_CLEANUP_INTERVAL: %w", err)
-	}
-
-	// RATE_EXPIRATION: When an unused limiter is considered stale. Default: 1 hour.
-	rateExpiration, err := time.ParseDuration(cmp.Or(os.Getenv("RATE_EXPIRATION"), "1h"))
-	if err != nil {
-		return Config{}, fmt.Errorf("invalid RATE_EXPIRATION: %w", err)
-	}
-
 	// Return the fully populated Config struct.
 	return Config{
-		APIKey:              apiKey,
-		Domain:              domain,
-		HTTPSPort:           httpsPort,
-		TLSCertFile:         tlsCertFile,
-		TLSKeyFile:          tlsKeyFile,
-		TrustProxy:          trustProxy,
-		MaxHeaderBytes:      maxHeaderBytes,
-		MaxBodyBytes:        maxBodyBytes,
-		ShutdownTimeout:     shutdownTimeout,
-		RateLimit:           rateLimit,
-		RateBurst:           rateBurst,
-		RateCleanupInterval: rateCleanupInterval,
-		RateExpiration:      rateExpiration,
+		APIKey:          apiKey,
+		Domain:          domain,
+		HTTPSPort:       httpsPort,
+		TLSCertFile:     tlsCertFile,
+		TLSKeyFile:      tlsKeyFile,
+		TrustProxy:      trustProxy,
+		MaxHeaderBytes:  maxHeaderBytes,
+		MaxBodyBytes:    maxBodyBytes,
+		ShutdownTimeout: shutdownTimeout,
 	}, nil
 }

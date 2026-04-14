@@ -45,11 +45,10 @@ func (s *Server) HandleFunc(pattern string, handler func(http.ResponseWriter, *h
 
 // Start orchestrates the complete server lifecycle. It performs the following steps:
 // 1. Registers the /metrics endpoint for Prometheus scraping.
-// 2. Initializes the middleware stack (Recovery, Request ID, Security, Rate Limiting, Logging).
+// 2. Initializes the middleware stack (Recovery, Request ID, Security, Logging).
 // 3. Configures TLS settings, loading manual certificates if provided.
-// 4. Launches a background routine to clean up stale rate limiters.
-// 5. Starts the main HTTP(S) listener in a goroutine.
-// 6. Blocks until an OS termination signal is received, then initiates a graceful shutdown.
+// 4. Starts the main HTTP(S) listener in a goroutine.
+// 5. Blocks until an OS termination signal is received, then initiates a graceful shutdown.
 func (s *Server) Start() error {
 	// Register the Prometheus metrics endpoint.
 	// This allows monitoring tools to scrape data about server performance and health.
@@ -60,13 +59,11 @@ func (s *Server) Start() error {
 	// 1. recoveryMiddleware: Catches and logs panics.
 	// 2. requestIDMiddleware: Assigns a unique ID to each request.
 	// 3. securityHeadersMiddleware: Adds security-related HTTP headers.
-	// 4. rateLimitMiddleware: Throttles requests based on client IP.
-	// 5. loggingMiddleware: Records request details and metrics.
+	// 4. loggingMiddleware: Records request details and metrics (client IP respects TRUST_PROXY).
 	handler := recoveryMiddleware(s.mux)
 	handler = requestIDMiddleware(handler)
 	handler = securityHeadersMiddleware(handler)
-	handler = rateLimitMiddleware(handler, s.cfg)
-	handler = loggingMiddleware(handler)
+	handler = loggingMiddleware(handler, s.cfg.TrustProxy)
 
 	// Wrap the final handler with MaxBytesHandler.
 	// This provides a hard limit on the request body size at the network level,
@@ -107,23 +104,6 @@ func (s *Server) Start() error {
 		MaxHeaderBytes: s.cfg.MaxHeaderBytes,
 		TLSConfig:      tlsConfig,
 	}
-
-	// --- Background Maintenance ---
-	// Start a dedicated goroutine for periodic memory cleanup.
-	go func() {
-		ticker := time.NewTicker(s.cfg.RateCleanupInterval)
-		defer ticker.Stop()
-		for range ticker.C {
-			mu.Lock()
-			// Iterate through the limiters map and remove entries that haven't been seen recently.
-			for ip, limiter := range limiters {
-				if time.Since(limiter.lastSeen) > s.cfg.RateExpiration {
-					delete(limiters, ip)
-				}
-			}
-			mu.Unlock()
-		}
-	}()
 
 	// --- Graceful Shutdown Setup ---
 	// Notify the 'quit' channel on OS interrupt or termination signals.

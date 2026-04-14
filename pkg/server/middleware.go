@@ -10,10 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/time/rate"
 )
 
 // requestIDKey is a custom, unexported type used to store and retrieve the request ID
@@ -115,74 +112,22 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// clientLimiter wraps a standard Go rate limiter with a timestamp of the last time it was accessed.
-// This allows the server to identify and remove stale limiters to free up memory.
-type clientLimiter struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
-}
-
-var (
-	// limiters is a global thread-safe map that stores rate limiters for every unique client IP.
-	limiters = make(map[string]*clientLimiter)
-	// mu is a mutex used to synchronize access to the limiters map.
-	mu sync.Mutex
-)
-
-// getLimiter retrieves an existing rate limiter for a specific IP address or creates a new one
-// if it's the first time seeing this client. It also updates the 'lastSeen' timestamp.
-func getLimiter(ip string, cfg Config) *rate.Limiter {
-	mu.Lock()
-	defer mu.Unlock()
-
-	v, exists := limiters[ip]
-	if !exists {
-		// Create a new token-bucket limiter based on the application's configuration.
-		limiter := rate.NewLimiter(rate.Limit(cfg.RateLimit), cfg.RateBurst)
-		limiters[ip] = &clientLimiter{limiter, time.Now()}
-		return limiter
+// clientIP returns the best-effort client address for logging. When trustProxy is true
+// (typical when Nginx or another reverse proxy terminates TLS and forwards requests),
+// the first hop in X-Forwarded-For is used; otherwise TCP RemoteAddr is parsed.
+func clientIP(r *http.Request, trustProxy bool) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
 	}
-
-	// Update the last seen time for cache eviction logic.
-	v.lastSeen = time.Now()
-	return v.limiter
-}
-
-// rateLimitMiddleware implements per-IP request throttling. This helps protect the server
-// from unintentional over-usage or malicious Denial of Service (DoS) attacks.
-func rateLimitMiddleware(next http.Handler, cfg Config) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Extract the client's IP address from the request.
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
-
-		// If the server is behind a Load Balancer or Proxy (e.g., Cloudflare, Nginx),
-		// we may need to trust the 'X-Forwarded-For' header to find the real client IP.
-		if cfg.TrustProxy {
-			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-				if parts := strings.Split(xff, ","); len(parts) > 0 {
-					ip = strings.TrimSpace(parts[0])
-				}
+	if trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if parts := strings.Split(xff, ","); len(parts) > 0 {
+				ip = strings.TrimSpace(parts[0])
 			}
 		}
-
-		// Check if the current IP address has exceeded its allowed request rate.
-		limiter := getLimiter(ip, cfg)
-		if !limiter.Allow() {
-			getLogger(r).Warn("Rate limit exceeded by client", "ip", ip)
-
-			// Increment the Prometheus metric for rate limit hits.
-			rateLimitHitsTotal.WithLabelValues(ip).Inc()
-
-			// Return a '429 Too Many Requests' error.
-			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
+	}
+	return ip
 }
 
 // responseWriter is a custom wrapper around http.ResponseWriter.
@@ -205,7 +150,7 @@ func (rw *responseWriter) WriteHeader(code int) {
 // 2. HTTP method, path, and remote address.
 // 3. Response status code.
 // It also updates Prometheus metrics (http_requests_total and http_request_duration_seconds).
-func loggingMiddleware(next http.Handler) http.Handler {
+func loggingMiddleware(next http.Handler, trustProxy bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -228,7 +173,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			"path", r.URL.Path,
 			"status", rw.statusCode,
 			"duration", duration,
-			"ip", r.RemoteAddr,
+			"ip", clientIP(r, trustProxy),
 		)
 
 		// Update Prometheus metrics for observability.

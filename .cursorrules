@@ -1,0 +1,314 @@
+# =============================================================================
+# Cursor rules — Go + html/template + HTMX (enterprise-oriented)
+# =============================================================================
+#
+# PURPOSE
+# -------
+# This file configures Cursor for a Go web stack: server-rendered HTML with
+# Go's html/template, HTMX for interactivity without a JS framework, and AI
+# guidance toward stdlib-first code, security middleware, and consistent docs.
+#
+# FORMAT
+# ------
+# YAML with a single top-level key `rules`, whose value is a list of rule
+# objects. Cursor merges these entries for editor hints, snippets, autocomplete,
+# and AI system/context behavior. Line comments (#) are YAML comments only;
+# they are not sent to the AI unless duplicated inside ai_context.notes or
+# ai_behavior.rules string blocks.
+#
+# FIELD REFERENCE (per rule entry)
+# --------------------------------
+# id              Unique string. Use kebab-case; helps you grep and edit.
+# description     Short human summary (optional but recommended).
+# patterns        Glob list; when present, scopes file-type / context rules.
+# language        Editor language id (e.g. go, gotemplate).
+# ai_context      Extra model context for matching or global notes:
+#   enabled       true/false
+#   weight        optional: e.g. high — relative emphasis if supported
+#   notes         Multiline string with stack-specific reminders
+# autocomplete    Structured completions (e.g. HTML attribute names).
+# snippets        List of { trigger, body } for tab-triggered expansions.
+# ai_behavior     Instructions to the AI, often global:
+#   priority      high | medium | low — ordering hint when rules conflict
+#   rules         Multiline string, usually markdown bullet list
+#
+# TIP: Keep ai_behavior.rules concise and actionable; long essays dilute focus.
+# =============================================================================
+
+rules:
+
+  # ---------------------------------------------------------------------------
+  # SECTION: File type & language mapping
+  # ---------------------------------------------------------------------------
+  # Maps globs to languages so syntax highlighting, parsing, and AI file
+  # context match Go templates vs plain HTML. HTML is included because in this
+  # stack it is often executed as Go template text, not static HTML only.
+  # ---------------------------------------------------------------------------
+
+  - id: go-template-filetypes
+    description: Treat HTML-like files as Go templates
+    patterns:
+      - "*.tmpl"    # common Go web convention
+      - "*.gohtml"  # explicit “this is Go HTML template”
+      - "*.tpl"     # generic template extension
+      - "*.html"    # often used with template.ParseGlob("*.html")
+    language: gotemplate
+    ai_context:
+      enabled: true
+      weight: high
+      notes: |
+        These files use Go's html/template syntax. Maintain awareness of:
+        - {{ . }}
+        - {{ if . }}
+        - {{ range .Items }}
+        - {{ block "name" . }} ... {{ end }}
+        - {{ template "partial" . }}
+        - Pipelines: {{ .Value | printf "%s" }}
+        - Safe HTML: {{ .HTML | safeHTML }}
+        Templates are rendered using Go's standard library html/template package.
+
+  - id: go-source-files
+    description: Go source files for web + HTMX apps
+    patterns:
+      - "*.go"
+    language: go
+    ai_context:
+      enabled: true
+      notes: |
+        Use Go's standard library for HTTP servers, middleware, routing, and template rendering.
+        Prefer:
+          - net/http
+          - html/template
+          - context
+          - crypto/tls
+          - sync, atomic, time when needed for concurrency or scheduling
+        Avoid third-party frameworks unless absolutely necessary.
+        Rate limiting at the HTTP edge is handled by Nginx (or similar), not in-process in the Go app.
+
+  # ---------------------------------------------------------------------------
+  # SECTION: Go template semantics (global AI context)
+  # ---------------------------------------------------------------------------
+  # No patterns: reinforces template philosophy whenever this context is merged.
+  # Encourages layout via block/define and safe HTML, not JS-style logic in tpl.
+  # ---------------------------------------------------------------------------
+
+  - id: go-template-syntax
+    description: Improve AI understanding of Go template constructs
+    ai_context:
+      enabled: true
+      notes: |
+        Go templates are logic-light and data-driven.
+        Avoid JS-like logic.
+        Encourage:
+          - {{ block }} / {{ define }} for layout inheritance
+          - Small, composable partials
+          - Safe HTML handling
+
+  # ---------------------------------------------------------------------------
+  # SECTION: HTMX — autocomplete for attributes
+  # ---------------------------------------------------------------------------
+  # Feeds attribute name suggestions in HTML/HTMX markup. Pair with snippets
+  # below for full patterns (buttons, forms, lazy regions).
+  # ---------------------------------------------------------------------------
+
+  - id: htmx-attributes
+    description: Provide autocomplete for HTMX attributes
+    autocomplete:
+      attributes:
+        - hx-get          # load from URL (GET)
+        - hx-post         # submit / mutate (POST)
+        - hx-put
+        - hx-delete
+        - hx-patch
+        - hx-target       # CSS selector for swap target
+        - hx-trigger      # e.g. click, load, revealed
+        - hx-swap         # innerHTML, outerHTML, etc.
+        - hx-push-url     # history / URL bar
+        - hx-select       # pick fragment from response
+        - hx-select-oob   # out-of-band swaps
+        - hx-vals         # extra parameters
+        - hx-confirm      # user confirmation
+        - hx-boost        # progressively enhance links/forms
+        - hx-indicator    # loading UI
+        - hx-headers      # request headers
+        - hx-ext          # extension hooks
+    ai_context:
+      enabled: true
+      notes: |
+        HTMX is used instead of JavaScript.
+        Encourage server-rendered partials and HTMX-driven interactivity.
+
+  # ---------------------------------------------------------------------------
+  # SECTION: Snippets — Go templates
+  # ---------------------------------------------------------------------------
+  # Prefix "gt" = Go template. Placeholders use ${n:label} tab stop style.
+  # ${0} is typically the final cursor position after expansion.
+  # ---------------------------------------------------------------------------
+
+  - id: go-template-snippets
+    description: Snippets for Go template constructs
+    snippets:
+      - trigger: gtif
+        body: |
+          {{ if ${1:condition} }}
+            ${0}
+          {{ end }}
+
+      - trigger: gtrange
+        body: |
+          {{ range ${1:.Items} }}
+            ${0}
+          {{ end }}
+
+      - trigger: gtblock
+        body: |
+          {{ block "${1:name}" . }}
+            ${0}
+          {{ end }}
+
+      - trigger: gtdefine
+        body: |
+          {{ define "${1:name}" }}
+            ${0}
+          {{ end }}
+
+      - trigger: gttemplate
+        body: |
+          {{ template "${1:partial}" . }}
+
+  # ---------------------------------------------------------------------------
+  # SECTION: Snippets — HTMX
+  # ---------------------------------------------------------------------------
+  # hx-${1:get} lets you type get/post/put etc. after expansion.
+  # ---------------------------------------------------------------------------
+
+  - id: htmx-snippets
+    description: Snippets for common HTMX patterns
+    snippets:
+      - trigger: hxbtn
+        body: |
+          <button
+            hx-${1:get}="${2:/endpoint}"
+            hx-target="${3:#target}"
+            hx-swap="${4:innerHTML}"
+          >
+            ${0:Click}
+          </button>
+
+      - trigger: hxform
+        body: |
+          <form hx-post="${1:/submit}" hx-target="${2:#result}" hx-swap="innerHTML">
+            ${0}
+          </form>
+
+      - trigger: hxload
+        body: |
+          <div
+            hx-get="${1:/load}"
+            hx-trigger="revealed"
+            hx-swap="innerHTML"
+          >
+            ${0}
+          </div>
+
+  # ---------------------------------------------------------------------------
+  # SECTION: AI behavior — stack & UI
+  # ---------------------------------------------------------------------------
+  # ai_behavior applies broadly (not file-scoped unless Cursor merges with path).
+  # priority: higher = more insistence when instructions could conflict.
+  # ---------------------------------------------------------------------------
+
+  - id: ai-behavior-golang-enterprise
+    ai_behavior:
+      priority: high
+      rules: |
+        - You are an expert enterprise Golang developer.
+        - Use only Go's standard library when possible.
+        - Prefer net/http, html/template, context, crypto/tls.
+        - Avoid JavaScript entirely; use HTMX for interactivity.
+
+  - id: ai-behavior-css-aws-theme
+    ai_behavior:
+      priority: medium
+      rules: |
+        - Use modern, idiomatic CSS.
+        - Use AWS color scheme:
+          - Background: #252F3E
+          - Accents: lighter greys
+          - Buttons: #FF9900
+        - Ensure responsive, accessible design.
+
+  - id: ai-behavior-readme-and-comments
+    ai_behavior:
+      priority: high
+      rules: |
+        - Always update README.md when generating or modifying code.
+        - README.md must fully explain functionality, setup, and architecture.
+        - Comment all files thoroughly and consistently.
+
+  - id: ai-behavior-docs-override-user-defaults
+    description: Project docs/README rules override generic “minimal markdown” preferences
+    ai_behavior:
+      priority: high
+      rules: |
+        - For this repository, the README-and-comments rules above take precedence over any general preference to avoid editing markdown or documentation unless explicitly asked.
+        - When code changes behavior, surface area, setup, or architecture, update README.md and any other project docs in the same change so documentation stays accurate.
+        - Keep documentation edits proportional to the code change (no unrelated rewrites).
+
+  # ---------------------------------------------------------------------------
+  # SECTION: AI behavior — security & middleware
+  # ---------------------------------------------------------------------------
+  # Aligns new code with: CSRF (crypto/rand, cookies, validate mutating methods),
+  # TLS (crypto/tls, HSTS, redirect HTTP), composable http.Handler middleware,
+  # stdlib logging, and edge rate limiting via Nginx (not in the Go process).
+  # ---------------------------------------------------------------------------
+
+  - id: ai-behavior-security-middleware
+    description: Middleware patterns inspired by the referenced rest_api_template
+    ai_behavior:
+      priority: high
+      rules: |
+        # Rate limiting (edge)
+        - Do not add in-process HTTP rate limiting; Nginx (or the deployment reverse proxy) owns throttling and abuse controls.
+        - Document proxy expectations in README when behavior depends on X-Forwarded-For or similar.
+
+        # CSRF Protection
+        - Implement CSRF protection using:
+            - Secure, random tokens from crypto/rand.
+            - HttpOnly, Secure cookies.
+            - Token validation on POST/PUT/PATCH/DELETE.
+        - Never rely on JavaScript for CSRF handling.
+        - Encourage double-submit cookie pattern or form-hidden-token pattern.
+
+        # TLS Enforcement
+        - Always configure TLS using crypto/tls.
+        - Encourage:
+            - Strict minimum TLS version (TLS 1.2 or 1.3).
+            - Secure cipher suites.
+            - HSTS headers.
+            - Redirect HTTP → HTTPS.
+        - Avoid self-signed certs except in local development.
+
+        # Middleware Architecture
+        - Middleware must be:
+            - Composable
+            - Stateless when possible
+            - Explicit and easy to test
+        - Encourage chaining patterns using http.HandlerFunc.
+        - Logging middleware should use Go's standard log package.
+
+  # ---------------------------------------------------------------------------
+  # SECTION: AI context — template rendering & HTMX responses
+  # ---------------------------------------------------------------------------
+  # Reminds the model to return partial HTML for HTMX, bind structs, stay safe.
+  # ---------------------------------------------------------------------------
+
+  - id: ai-context-template-rendering
+    ai_context:
+      enabled: true
+      notes: |
+        - Render templates using html/template.
+        - Use partials for HTMX responses.
+        - Avoid JavaScript entirely.
+        - Use Go structs for data binding.
+        - Maintain safe HTML practices.

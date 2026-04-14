@@ -31,15 +31,6 @@ var (
 		Buckets: prometheus.DefBuckets,
 	}, []string{"method", "path"})
 
-	// rateLimitHitsTotal is a Prometheus counter that tracks the total number of requests that were
-	// rejected by the rate limiting middleware.
-	// It is partitioned by:
-	// - remote_addr: The IP address of the client that triggered the rate limit.
-	rateLimitHitsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "rate_limit_hits_total",
-		Help: "Total number of requests rejected due to rate limiting, partitioned by client IP.",
-	}, []string{"remote_addr"})
-
 	// panicsTotal is a Prometheus counter that tracks the total number of unexpected application panics
 	// that were successfully caught and recovered by the recoveryMiddleware.
 	// A non-zero value here indicates a critical bug in the request handling logic.
